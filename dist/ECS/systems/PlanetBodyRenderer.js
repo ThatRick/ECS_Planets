@@ -31,7 +31,7 @@ export class PlanetBodyRenderer extends SystemBase {
         ctx.restore();
     }
     bodyColor(temp) {
-        const min = 60;
+        const min = 100;
         const r = scale(temp, 0, 1000, min, 255, true);
         const g = scale(temp, 0, 7000, min, 255, true);
         const b = scale(temp, 0, 10000, min, 255, true);

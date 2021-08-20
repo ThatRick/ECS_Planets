@@ -11,7 +11,7 @@ export class GravitySystem extends SystemBase {
                 if (planet !== otherPlanet) {
                     const dist = Vec2.distance(planet.pos, otherPlanet.pos);
                     // Check for collision
-                    if (dist < planet.size + otherPlanet.size) {
+                    if (dist < planet.size + otherPlanet.size && planet.mass > 0 && otherPlanet.mass > 0) {
                         // Merge body with higher id to body with lower id
                         if (i < j) {
                             const combinedMass = planet.mass + otherPlanet.mass;

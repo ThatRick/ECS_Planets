@@ -36,8 +36,9 @@ export default class App
         const massMin = 1e14
         const massMax = 4e14
         const bodyCount = 300
-        const radiusMin = 1000
+        const radiusMin = 10000
         const radiusMax = 500000
+        const orbitVel = 100000
 
         this.ecs.timeFactor = 100
 
@@ -45,7 +46,7 @@ export default class App
             const r = radiusMin + (Math.random() * (radiusMax - radiusMin))
             const ang = Vec2.randomRay()
             const pos = Vec2.scale(ang, r)
-            const vel = Vec2.rotate(ang, Math.PI / 2).scale(Math.sqrt(100/r))
+            const vel = Vec2.rotate(ang, Math.PI / 2).scale((orbitVel/r)**1.1)
             const mass = massMin + (massMax-massMin) * Math.random()
             const size = GravitySystem.bodySize(mass)
 

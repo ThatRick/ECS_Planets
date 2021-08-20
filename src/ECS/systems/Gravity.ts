@@ -40,7 +40,7 @@ export class GravitySystem extends SystemBase
                                                            1 / combinedMass)
                             const velDiff = Vec2.sub(planet.vel, otherPlanet.vel).len()
                             const initKineticEnergy = 0.5 * planet.mass * planet.vel.len()**2
-                                                + 0.5 * otherPlanet.mass * otherPlanet.vel.len()**2
+                                                    + 0.5 * otherPlanet.mass * otherPlanet.vel.len()**2
 
                             const resultKineticEnergy = 0.5 * combinedMass * combinedVel.len()**2
                             const kineticEnergyLoss = initKineticEnergy - resultKineticEnergy
