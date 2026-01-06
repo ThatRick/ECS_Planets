@@ -3,10 +3,13 @@ import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, Ph
 export default class App {
     canvas;
     world;
-    constructor(canvas, width, height) {
-        canvas.width = width;
-        canvas.height = height;
+    bodyCountEl;
+    constructor(canvas) {
         this.canvas = canvas;
+        this.bodyCountEl = document.getElementById('bodyCount');
+        // Set up responsive canvas
+        this.resizeCanvas();
+        window.addEventListener('resize', () => this.resizeCanvas());
         this.world = new World(100); // 100 Hz physics
         this.setup();
         // Main render loop
@@ -15,6 +18,13 @@ export default class App {
             requestAnimationFrame(loop);
         };
         loop();
+    }
+    resizeCanvas() {
+        const container = this.canvas.parentElement;
+        if (container) {
+            this.canvas.width = container.clientWidth;
+            this.canvas.height = container.clientHeight;
+        }
     }
     setup() {
         const { width, height } = this.canvas;
@@ -64,7 +74,17 @@ export default class App {
         world.registerSystem(createPlanetRenderer(this.canvas));
         // Bind UI controls
         world.bindControls();
+        // Update body count when entities are removed
+        world.on('entityRemoved', () => this.updateBodyCount());
+        this.updateBodyCount();
         console.log(`Created ${config.bodyCount} planets`);
+    }
+    updateBodyCount() {
+        if (this.bodyCountEl) {
+            // Count entities with Mass component (planets only, not camera)
+            const count = this.world.query(Mass).length;
+            this.bodyCountEl.textContent = String(count);
+        }
     }
     update() {
         this.world.updateVisuals();

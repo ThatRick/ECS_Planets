@@ -1,12 +1,13 @@
 {
-    "compilerOptions":
-    {
+    "compilerOptions": {
         "module": "ES6",
         "target": "ESNext",
         "moduleResolution": "node",
         "declaration": false,
         "lib": ["ESNext", "DOM"],
         "outDir": "dist",
+        "skipLibCheck": true
     },
-    "include": ["src/**/*"]
+    "include": ["src/**/*"],
+    "exclude": ["node_modules", "**/*.test.ts"]
 }

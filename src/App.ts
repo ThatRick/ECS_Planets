@@ -16,11 +16,15 @@ import {
 export default class App {
     canvas: HTMLCanvasElement
     world: World
+    private bodyCountEl: HTMLElement | null
 
-    constructor(canvas: HTMLCanvasElement, width: number, height: number) {
-        canvas.width = width
-        canvas.height = height
+    constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
+        this.bodyCountEl = document.getElementById('bodyCount')
+
+        // Set up responsive canvas
+        this.resizeCanvas()
+        window.addEventListener('resize', () => this.resizeCanvas())
 
         this.world = new World(100) // 100 Hz physics
         this.setup()
@@ -31,6 +35,14 @@ export default class App {
             requestAnimationFrame(loop)
         }
         loop()
+    }
+
+    private resizeCanvas(): void {
+        const container = this.canvas.parentElement
+        if (container) {
+            this.canvas.width = container.clientWidth
+            this.canvas.height = container.clientHeight
+        }
     }
 
     setup(): void {
@@ -93,7 +105,19 @@ export default class App {
         // Bind UI controls
         world.bindControls()
 
+        // Update body count when entities are removed
+        world.on('entityRemoved', () => this.updateBodyCount())
+        this.updateBodyCount()
+
         console.log(`Created ${config.bodyCount} planets`)
+    }
+
+    private updateBodyCount(): void {
+        if (this.bodyCountEl) {
+            // Count entities with Mass component (planets only, not camera)
+            const count = this.world.query(Mass).length
+            this.bodyCountEl.textContent = String(count)
+        }
     }
 
     update(): void {
