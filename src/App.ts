@@ -1,93 +1,102 @@
-import Vec2, {vec2} from './lib/Vector2.js'
-import * as ECS from './ECS/ECS.js'
+import Vec2 from './lib/Vector2.js'
 import {
-    PlanetBodyRenderer,
+    World,
+    Position,
+    Velocity,
+    Mass,
+    Size,
+    Temperature,
+    CameraComponent,
+    PhysicsConfig,
     GravitySystem,
-    MovementSystem,
-    CameraMovementSystem,
-} from './ECS/systems/index.js'
+    createCameraMovementSystem,
+    createPlanetRenderer
+} from './ECS/index.js'
 
-export default class App
-{
+export default class App {
     canvas: HTMLCanvasElement
-    ecs: ECS.World = new ECS.World(100)
+    world: World
 
-    renderer: PlanetBodyRenderer
-    
-    constructor(canvas: HTMLCanvasElement, width: number, heigth: number)
-    {
+    constructor(canvas: HTMLCanvasElement, width: number, height: number) {
         canvas.width = width
-        canvas.height = heigth
+        canvas.height = height
         this.canvas = canvas
 
+        this.world = new World(100) // 100 Hz physics
         this.setup()
 
+        // Main render loop
         const loop = () => {
             this.update()
             requestAnimationFrame(loop)
         }
-
         loop()
     }
 
-    setup()
-    {
+    setup(): void {
         const { width, height } = this.canvas
-        const massMin = 1e14
-        const massMax = 4e14
-        const bodyCount = 300
-        const radiusMin = 10000
-        const radiusMax = 500000
-        const orbitVel = 100000
+        const world = this.world
 
-        this.ecs.timeFactor = 100
+        // Configuration
+        const config = {
+            bodyCount: 300,
+            massMin: 1e14,
+            massMax: 4e14,
+            radiusMin: 10000,
+            radiusMax: 500000,
+            orbitVel: 100000,
+            initialTemp: 100
+        }
 
-        const points = Array.from({length: bodyCount}).map(i => {
-            const r = radiusMin + (Math.random() * (radiusMax - radiusMin))
-            const ang = Vec2.randomRay()
-            const pos = Vec2.scale(ang, r)
-            const vel = Vec2.rotate(ang, Math.PI / 2).scale((orbitVel/r)**1.1)
-            const mass = massMin + (massMax-massMin) * Math.random()
-            const size = GravitySystem.bodySize(mass)
+        // Time factor for simulation speed
+        world.timeFactor = 100
 
-            return {
-                pos,
-                vel,
-                size,
-                mass
-            }
+        // Create camera entity
+        const cameraEntity = world.createEntity()
+        world.addComponent(cameraEntity, CameraComponent, {
+            zoom: height / config.radiusMax * 0.5,
+            offset: new Vec2(width / 2, height / 2)
         })
 
-        const camera = {
-            camera: {
-                zoom: height/radiusMax * 0.5,
-                offset: new Vec2(width/2, height/2)
-            } as ECS.Camera
+        // Create planet entities
+        for (let i = 0; i < config.bodyCount; i++) {
+            const entity = world.createEntity()
+
+            // Random position in disk
+            const r = config.radiusMin + Math.random() * (config.radiusMax - config.radiusMin)
+            const angle = Vec2.randomRay()
+            const pos = Vec2.scale(angle, r)
+
+            // Velocity perpendicular to radius for quasi-orbital motion
+            // Using r^(-1.1) for slightly steeper than circular orbit
+            const vel = Vec2.rotate(angle, Math.PI / 2).scale((config.orbitVel / r) ** 1.1)
+
+            // Random mass
+            const mass = config.massMin + (config.massMax - config.massMin) * Math.random()
+            const size = PhysicsConfig.bodySize(mass)
+
+            world.addComponent(entity, Position, pos)
+            world.addComponent(entity, Velocity, vel)
+            world.addComponent(entity, Mass, mass)
+            world.addComponent(entity, Size, size)
+            world.addComponent(entity, Temperature, config.initialTemp)
         }
-        this.ecs.addEntity(camera)
 
-        const entities: ECS.Entity[] = points.map(body => ({
-            ...body,
-            temperature: 100
-        }) )
-        this.ecs.addEntities(entities)
+        // Register systems
+        // Simulation systems (run on fixed timestep)
+        world.registerSystem(GravitySystem)
 
-        this.renderer = new PlanetBodyRenderer(this.canvas)
+        // Visual systems (run on requestAnimationFrame)
+        world.registerSystem(createCameraMovementSystem(this.canvas))
+        world.registerSystem(createPlanetRenderer(this.canvas))
 
-        this.ecs.registerSystems([
-            new GravitySystem(),
-            new MovementSystem(),
-        ])
-        this.ecs.registerSystems([
-            new CameraMovementSystem(this.canvas),
-            this.renderer,
-        ], true)
+        // Bind UI controls
+        world.bindControls()
 
-        //this.ecs.start()
+        console.log(`Created ${config.bodyCount} planets`)
     }
 
-    update()
-    {
-        this.ecs.updateVisuals()
+    update(): void {
+        this.world.updateVisuals()
     }
 }
