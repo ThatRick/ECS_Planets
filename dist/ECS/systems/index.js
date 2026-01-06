@@ -1,4 +1,4 @@
-export * from './PlanetBodyRenderer.js';
-export * from './Gravity.js';
-export * from './Movement.js';
-export * from './CameraMovement.js';
+export { GravitySystem } from './GravitySystem.js';
+export { MovementSystem } from './MovementSystem.js';
+export { createCameraMovementSystem } from './CameraMovementSystem.js';
+export { createPlanetRenderer } from './PlanetRenderer.js';

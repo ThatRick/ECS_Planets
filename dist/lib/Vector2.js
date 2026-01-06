@@ -8,6 +8,8 @@ export function vec2(xv, y) {
     }
 }
 export default class Vec2 {
+    x;
+    y;
     constructor(x, y) {
         this.x = x;
         this.y = y;
