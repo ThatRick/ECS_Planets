@@ -1,17 +1,31 @@
 import Vec2 from './lib/Vector2.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystem, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
+import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js';
+const GRAVITY_SYSTEMS = {
+    'original': GravitySystem,
+    'optimized': GravitySystemOptimized,
+    'barnes-hut': GravitySystemBarnesHut
+};
 export default class App {
     canvas;
     world;
     bodyCountEl;
+    perfMonitor;
+    currentGravityType = 'optimized';
     constructor(canvas) {
         this.canvas = canvas;
         this.bodyCountEl = document.getElementById('bodyCount');
+        this.perfMonitor = new PerfMonitor();
+        // Add performance overlay
+        const overlay = createPerfOverlay();
+        document.body.appendChild(overlay);
+        this.perfMonitor.onUpdate = updatePerfOverlay;
         // Set up responsive canvas
         this.resizeCanvas();
         window.addEventListener('resize', () => this.resizeCanvas());
         this.world = new World(100); // 100 Hz physics
         this.setup();
+        this.setupBenchmarkControls();
         // Main render loop
         const loop = () => {
             this.update();
@@ -25,6 +39,97 @@ export default class App {
             this.canvas.width = container.clientWidth;
             this.canvas.height = container.clientHeight;
         }
+    }
+    setupBenchmarkControls() {
+        // Add benchmark controls to the UI
+        const controls = document.getElementById('controls');
+        if (!controls)
+            return;
+        // Create gravity system selector
+        const gravitySelect = document.createElement('select');
+        gravitySelect.id = 'gravitySelect';
+        gravitySelect.innerHTML = `
+            <option value="original">O(n²) Original</option>
+            <option value="optimized" selected>O(n²) Optimized</option>
+            <option value="barnes-hut">O(n log n) Barnes-Hut</option>
+        `;
+        gravitySelect.style.cssText = 'padding: 8px; border-radius: 4px; background: #444; color: #fff; border: none;';
+        gravitySelect.addEventListener('change', () => {
+            this.switchGravitySystem(gravitySelect.value);
+        });
+        // Create entity count input
+        const entityLabel = document.createElement('label');
+        entityLabel.style.cssText = 'color: #888; font-size: 12px;';
+        entityLabel.innerHTML = 'Entities: ';
+        const entityInput = document.createElement('input');
+        entityInput.type = 'number';
+        entityInput.id = 'entityCount';
+        entityInput.value = '300';
+        entityInput.min = '10';
+        entityInput.max = '5000';
+        entityInput.step = '100';
+        entityInput.style.cssText = 'width: 70px; padding: 8px; border-radius: 4px; background: #444; color: #fff; border: none;';
+        // Reset button
+        const resetBtn = document.createElement('button');
+        resetBtn.textContent = 'Reset';
+        resetBtn.addEventListener('click', () => {
+            const count = parseInt(entityInput.value) || 300;
+            this.resetSimulation(count);
+        });
+        // Add to controls
+        const separator = document.createElement('span');
+        separator.style.cssText = 'border-left: 1px solid #444; height: 24px; margin: 0 8px;';
+        controls.insertBefore(separator, controls.querySelector('#stats'));
+        controls.insertBefore(gravitySelect, controls.querySelector('#stats'));
+        controls.insertBefore(entityLabel, controls.querySelector('#stats'));
+        entityLabel.appendChild(entityInput);
+        controls.insertBefore(resetBtn, controls.querySelector('#stats'));
+    }
+    switchGravitySystem(type) {
+        // Remove current gravity system
+        const currentSystem = GRAVITY_SYSTEMS[this.currentGravityType];
+        this.world.unregisterSystem(currentSystem.name);
+        // Add new gravity system
+        const newSystem = GRAVITY_SYSTEMS[type];
+        this.world.registerSystem(newSystem);
+        this.currentGravityType = type;
+        console.log(`Switched to ${type} gravity system`);
+        this.perfMonitor.reset();
+    }
+    resetSimulation(bodyCount) {
+        // Clear all entities except camera
+        const entities = this.world.query(Position, Velocity, Mass);
+        for (const id of entities) {
+            this.world.removeEntity(id);
+        }
+        this.world.flush();
+        // Create new bodies
+        const config = {
+            bodyCount,
+            massMin: 1e14,
+            massMax: 4e14,
+            radiusMin: 10000,
+            radiusMax: 500000,
+            orbitVel: 100000,
+            initialTemp: 100
+        };
+        for (let i = 0; i < config.bodyCount; i++) {
+            const entity = this.world.createEntity();
+            const r = config.radiusMin + Math.random() * (config.radiusMax - config.radiusMin);
+            const angle = Vec2.randomRay();
+            const pos = Vec2.scale(angle, r);
+            const vel = Vec2.rotate(angle, Math.PI / 2).scale((config.orbitVel / r) ** 1.1);
+            const mass = config.massMin + (config.massMax - config.massMin) * Math.random();
+            const size = PhysicsConfig.bodySize(mass);
+            this.world.addComponent(entity, Position, pos);
+            this.world.addComponent(entity, Velocity, vel);
+            this.world.addComponent(entity, Mass, mass);
+            this.world.addComponent(entity, Size, size);
+            this.world.addComponent(entity, Temperature, config.initialTemp);
+        }
+        this.updateBodyCount();
+        this.perfMonitor.reset();
+        console.log(`Reset with ${bodyCount} entities`);
     }
     setup() {
         const { width, height } = this.canvas;
@@ -87,6 +192,12 @@ export default class App {
         }
     }
     update() {
+        this.perfMonitor.frameStart();
+        this.perfMonitor.physicsStart();
+        // Physics runs inside updateVisuals via fixed timestep
         this.world.updateVisuals();
+        this.perfMonitor.physicsEnd();
+        const entityCount = this.world.query(Mass).length;
+        this.perfMonitor.frameEnd(entityCount);
     }
 }

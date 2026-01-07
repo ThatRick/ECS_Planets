@@ -129,6 +129,9 @@ export function createGravitySystemParallel(
     let pendingAccelerations: PendingResult | null = null
     let lastEntityCount = 0
 
+    // Generation counter to prevent race conditions when frames overlap
+    let currentGeneration = 0
+
     for (let i = 0; i < numWorkers; i++) {
         const worker = new Worker(workerUrl)
         worker.onmessage = (e) => {
@@ -139,10 +142,6 @@ export function createGravitySystemParallel(
         workers.push(worker)
     }
 
-    // Results accumulator for current computation
-    let resultsReceived = 0
-    let expectedResults = 0
-
     function startAsyncComputation(
         posX: Float64Array,
         posY: Float64Array,
@@ -150,8 +149,11 @@ export function createGravitySystemParallel(
         n: number,
         G: number
     ): void {
-        resultsReceived = 0
-        expectedResults = Math.min(workers.length, Math.ceil(n / 100))
+        // Increment generation to invalidate any in-flight computations
+        const generation = ++currentGeneration
+
+        const expectedResults = Math.min(workers.length, Math.ceil(n / 100))
+        let resultsReceived = 0
 
         const newAccX = new Float64Array(n)
         const newAccY = new Float64Array(n)
@@ -169,6 +171,14 @@ export function createGravitySystemParallel(
             // One-time handler for this computation
             const handler = (e: MessageEvent) => {
                 if (e.data.type === 'result') {
+                    // Remove handler immediately to prevent double-firing
+                    worker.removeEventListener('message', handler)
+
+                    // Ignore results from stale computations
+                    if (generation !== currentGeneration) {
+                        return
+                    }
+
                     // Copy results into accumulator
                     const { accX: resultAccX, accY: resultAccY, startIdx: rStart } = e.data
                     for (let i = 0; i < resultAccX.length; i++) {
@@ -181,8 +191,6 @@ export function createGravitySystemParallel(
                         // All results received - store for next frame
                         pendingAccelerations = { accX: newAccX, accY: newAccY }
                     }
-
-                    worker.removeEventListener('message', handler)
                 }
             }
 
@@ -289,6 +297,7 @@ export function createGravitySystemParallel(
             accY.fill(0, 0, n)
 
             const useWorkers = workersReady >= numWorkers && n >= minEntitiesForParallel
+            let usedCache = false
 
             if (useWorkers) {
                 // Use pending results from previous frame (if available and matching)
@@ -299,12 +308,18 @@ export function createGravitySystemParallel(
                             accY[i] = pendingAccelerations.accY[i]
                         }
                     }
+                    usedCache = true
                 }
 
                 // Start async computation for next frame
                 startAsyncComputation(posX, posY, mass, n, G)
                 lastEntityCount = n
-            } else {
+            }
+
+            // Fall back to synchronous calculation if:
+            // - Workers not ready/enabled, OR
+            // - No valid cached result available (first frame or entity count changed)
+            if (!useWorkers || !usedCache) {
                 // Single-threaded fallback (using Newton's 3rd law optimization)
                 for (let i = 0; i < n; i++) {
                     if (mergedIndices.has(i)) continue
