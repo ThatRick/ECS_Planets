@@ -143,6 +143,11 @@ export function createPerfOverlay(): HTMLElement {
                 border-radius: 4px;
                 z-index: 1000;
                 min-width: 180px;
+                transition: opacity 0.2s;
+            }
+            #perf-overlay.hidden {
+                opacity: 0;
+                pointer-events: none;
             }
             #perf-overlay .label {
                 color: #888;
@@ -162,6 +167,12 @@ export function createPerfOverlay(): HTMLElement {
                 border-top: 1px solid #333;
                 margin: 6px 0;
             }
+            #perf-overlay .hint {
+                color: #555;
+                font-size: 10px;
+                text-align: center;
+                margin-top: 6px;
+            }
         </style>
         <div class="row">
             <span class="label">FPS:</span>
@@ -180,8 +191,33 @@ export function createPerfOverlay(): HTMLElement {
             <span class="label">Entities:</span>
             <span class="value" id="perf-entities">--</span>
         </div>
+        <div class="hint">Press P to toggle</div>
     `
+
+    // Setup keyboard toggle
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'p' || e.key === 'P') {
+            overlay.classList.toggle('hidden')
+        }
+    })
+
     return overlay
+}
+
+/**
+ * Toggle performance overlay visibility
+ */
+export function togglePerfOverlay(visible?: boolean): void {
+    const overlay = document.getElementById('perf-overlay')
+    if (!overlay) return
+
+    if (visible === undefined) {
+        overlay.classList.toggle('hidden')
+    } else if (visible) {
+        overlay.classList.remove('hidden')
+    } else {
+        overlay.classList.add('hidden')
+    }
 }
 
 /**

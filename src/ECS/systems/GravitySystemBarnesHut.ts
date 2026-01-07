@@ -82,7 +82,7 @@ export const GravitySystemBarnesHut: System = {
 
         ensureScratch(count)
         const s = scratch!
-        const { G, heatCapacity, stefanBoltzmann, minTemperature } = PhysicsConfig
+        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
 
         // Copy data to contiguous arrays (SOA layout)
         for (let i = 0; i < count; i++) {
@@ -151,7 +151,7 @@ export const GravitySystemBarnesHut: System = {
                 const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2)
                 const energyLoss = initKE - finalKE
                 const combinedTemp = (s.temp[winner] * mW + s.temp[loser] * mL) / combinedMass
-                const impactHeat = energyLoss / (combinedMass * heatCapacity)
+                const impactHeat = (energyLoss * impactHeatMultiplier) / (combinedMass * heatCapacity)
 
                 // Update winner
                 s.posX[winner] = newPx

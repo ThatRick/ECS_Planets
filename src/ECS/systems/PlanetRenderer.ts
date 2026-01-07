@@ -53,24 +53,28 @@ export function createPlanetRenderer(canvas: HTMLCanvasElement): System {
 
 /**
  * Convert temperature to RGB color.
- * Approximates black-body radiation color.
+ * Uses logarithmic scale for better visualization across wide temp ranges.
  *
- * - Cold bodies (~100K): Dark gray
- * - Warm bodies (~1000K): Red
- * - Hot bodies (~7000K): Yellow/white
- * - Very hot (~10000K+): Blue-white
+ * - Cold bodies (~100K): Dark gray/brown
+ * - Warm bodies (~500K): Red
+ * - Hot bodies (~2000K): Orange/Yellow
+ * - Very hot (~5000K+): White/Blue-white
  */
 function bodyColor(temp: number): string {
-    const minBrightness = 100
+    const minBrightness = 80
 
-    // Red channel ramps up first (0-1000K)
-    const r = scale(temp, 0, 1000, minBrightness, 255, true)
+    // Use logarithmic scale for temperature perception
+    // log10(100) = 2, log10(1000) = 3, log10(10000) = 4
+    const logTemp = Math.log10(Math.max(temp, 1))
 
-    // Green follows (0-7000K)
-    const g = scale(temp, 0, 7000, minBrightness, 255, true)
+    // Red: ramps from 2 (100K) to 2.7 (500K)
+    const r = scale(logTemp, 2, 2.7, minBrightness, 255, true)
 
-    // Blue last (0-10000K)
-    const b = scale(temp, 0, 10000, minBrightness, 255, true)
+    // Green: ramps from 2.3 (200K) to 3.3 (2000K)
+    const g = scale(logTemp, 2.3, 3.3, minBrightness, 255, true)
+
+    // Blue: ramps from 2.7 (500K) to 3.7 (5000K)
+    const b = scale(logTemp, 2.7, 3.7, minBrightness, 255, true)
 
     return color(r, g, b)
 }
