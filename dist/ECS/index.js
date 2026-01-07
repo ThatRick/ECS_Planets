@@ -6,7 +6,8 @@ export { Position, Velocity, Mass, Size, Temperature, CameraComponent } from './
 // Utilities
 export { SpatialHash } from './SpatialHash.js';
 export { PhysicsConfig } from './PhysicsConfig.js';
+export { QuadTree } from './QuadTree.js';
 // Systems
-export { GravitySystem, GravitySystemOptimized, MovementSystem, createCameraMovementSystem, createPlanetRenderer } from './systems/index.js';
+export { GravitySystem, GravitySystemOptimized, GravitySystemBarnesHut, MovementSystem, createCameraMovementSystem, createPlanetRenderer } from './systems/index.js';
 // High-performance storage
 export { ScalarStore, Vec2Store, EntityManager, PhysicsScratch } from './ComponentStore.js';

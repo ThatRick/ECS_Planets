@@ -18,11 +18,13 @@ export {
 // Utilities
 export { SpatialHash } from './SpatialHash.js'
 export { PhysicsConfig } from './PhysicsConfig.js'
+export { QuadTree, Body } from './QuadTree.js'
 
 // Systems
 export {
     GravitySystem,
     GravitySystemOptimized,
+    GravitySystemBarnesHut,
     MovementSystem,
     createCameraMovementSystem,
     createPlanetRenderer
