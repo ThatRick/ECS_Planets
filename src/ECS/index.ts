@@ -25,6 +25,7 @@ export {
     GravitySystem,
     GravitySystemOptimized,
     GravitySystemBarnesHut,
+    createGravitySystemParallel,
     MovementSystem,
     createCameraMovementSystem,
     createPlanetRenderer

@@ -15,6 +15,8 @@ export class QuadTree {
     // Theta parameter for Barnes-Hut approximation
     // Lower = more accurate, higher = faster
     theta = 0.5;
+    // Maximum tree depth to prevent infinite recursion for coincident bodies
+    static MAX_DEPTH = 50;
     /**
      * Build the QuadTree from an array of bodies.
      * Call this once per frame before computing forces.
@@ -48,7 +50,7 @@ export class QuadTree {
         this.root = this.createNode(cx, cy, halfSize);
         // Insert all bodies
         for (const body of bodies) {
-            this.insert(this.root, body);
+            this.insert(this.root, body, 0);
         }
         // Compute mass distributions (bottom-up)
         this.computeMassDistribution(this.root);
@@ -64,11 +66,17 @@ export class QuadTree {
             bodyCount: 0
         };
     }
-    insert(node, body) {
+    insert(node, body, depth) {
         // If this is an empty leaf, store the body here
         if (node.bodyCount === 0) {
             node.body = body;
             node.bodyCount = 1;
+            return;
+        }
+        // If at max depth, just aggregate the body into this node
+        // (handles coincident bodies without infinite recursion)
+        if (depth >= QuadTree.MAX_DEPTH) {
+            node.bodyCount++;
             return;
         }
         // If this is a leaf with one body, we need to subdivide
@@ -78,14 +86,14 @@ export class QuadTree {
             this.subdivide(node);
             // Re-insert the existing body
             const quadrant1 = this.getQuadrant(node, existingBody);
-            this.insert(node.children[quadrant1], existingBody);
+            this.insert(node.children[quadrant1], existingBody, depth + 1);
         }
         // Insert the new body into appropriate quadrant
         if (node.children === null) {
             this.subdivide(node);
         }
         const quadrant = this.getQuadrant(node, body);
-        this.insert(node.children[quadrant], body);
+        this.insert(node.children[quadrant], body, depth + 1);
         node.bodyCount++;
     }
     subdivide(node) {
@@ -213,8 +221,10 @@ export class QuadTree {
             nodeCount++;
             if (depth > maxDepth)
                 maxDepth = depth;
-            if (node.body)
-                bodyCount++;
+            // Count bodies: leaf nodes have bodyCount > 0 and no children
+            if (!node.children) {
+                bodyCount += node.bodyCount;
+            }
             if (node.children) {
                 for (const child of node.children) {
                     if (child)
