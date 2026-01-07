@@ -217,7 +217,7 @@ export function createGravitySystemParallel(
             const n = entities.length
             if (n === 0) return
 
-            const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
+            const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier, maxImpactTemperature } = PhysicsConfig
             const s = ensureScratch(n)
             const { posX, posY, velX, velY, mass, size, temp, accX, accY, entityIds } = s
 
@@ -281,7 +281,7 @@ export function createGravitySystemParallel(
                     velY[winner] = newVy
                     mass[winner] = combinedMass
                     size[winner] = PhysicsConfig.bodySize(combinedMass)
-                    temp[winner] = combinedTemp + impactHeat
+                    temp[winner] = Math.min(combinedTemp + impactHeat, maxImpactTemperature)
 
                     mergedIndices.add(loser)
                 }

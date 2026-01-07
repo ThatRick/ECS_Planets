@@ -82,7 +82,7 @@ export const GravitySystemBarnesHut: System = {
 
         ensureScratch(count)
         const s = scratch!
-        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
+        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier, maxImpactTemperature } = PhysicsConfig
 
         // Copy data to contiguous arrays (SOA layout)
         for (let i = 0; i < count; i++) {
@@ -145,7 +145,7 @@ export const GravitySystemBarnesHut: System = {
                 const newPx = (s.posX[winner] * mW + s.posX[loser] * mL) / combinedMass
                 const newPy = (s.posY[winner] * mW + s.posY[loser] * mL) / combinedMass
 
-                // Impact heating
+                // Impact heating (capped)
                 const initKE = 0.5 * mW * (s.velX[winner] ** 2 + s.velY[winner] ** 2)
                             + 0.5 * mL * (s.velX[loser] ** 2 + s.velY[loser] ** 2)
                 const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2)
@@ -160,7 +160,7 @@ export const GravitySystemBarnesHut: System = {
                 s.velY[winner] = newVy
                 s.mass[winner] = combinedMass
                 s.size[winner] = PhysicsConfig.bodySize(combinedMass)
-                s.temp[winner] = combinedTemp + impactHeat
+                s.temp[winner] = Math.min(combinedTemp + impactHeat, maxImpactTemperature)
 
                 // Update body for QuadTree
                 bodies[winner].x = newPx
