@@ -6,8 +6,17 @@ export const PhysicsConfig = {
     /** Gravitational constant (m³/kg/s²) */
     G: 6.674e-11,
 
-    /** Heat capacity (J/kg/K) */
+    /**
+     * Heat capacity (J/kg/K) - realistic value for rocky material
+     */
     heatCapacity: 2000,
+
+    /**
+     * Impact heat multiplier for visualization.
+     * Multiplies the kinetic energy converted to heat during collisions.
+     * Higher values = more dramatic heating on impact.
+     */
+    impactHeatMultiplier: 20000,
 
     /** Stefan-Boltzmann constant (W/m²/K⁴) */
     stefanBoltzmann: 5.670367e-8,

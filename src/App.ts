@@ -15,6 +15,7 @@ import {
     createPlanetRenderer
 } from './ECS/index.js'
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js'
+import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 
 type GravityType = 'original' | 'optimized' | 'barnes-hut'
@@ -41,6 +42,12 @@ export default class App {
         const overlay = createPerfOverlay()
         document.body.appendChild(overlay)
         this.perfMonitor.onUpdate = updatePerfOverlay
+
+        // Add settings panel
+        const settingsPanel = createSettingsPanel((settings) => {
+            this.resetSimulation(settings)
+        })
+        document.body.appendChild(settingsPanel)
 
         // Set up responsive canvas
         this.resizeCanvas()
@@ -103,7 +110,7 @@ export default class App {
         resetBtn.textContent = 'Reset'
         resetBtn.addEventListener('click', () => {
             const count = parseInt(entityInput.value) || 300
-            this.resetSimulation(count)
+            this.resetSimulation({ ...DEFAULT_SETTINGS, bodyCount: count })
         })
 
         // Add to controls
@@ -131,7 +138,7 @@ export default class App {
         this.perfMonitor.reset()
     }
 
-    private resetSimulation(bodyCount: number): void {
+    private resetSimulation(settings: SimSettings): void {
         // Clear all entities except camera
         const entities = this.world.query(Position, Velocity, Mass)
         for (const id of entities) {
@@ -139,37 +146,30 @@ export default class App {
         }
         this.world.flush()
 
-        // Create new bodies
-        const config = {
-            bodyCount,
-            massMin: 1e14,
-            massMax: 4e14,
-            radiusMin: 10000,
-            radiusMax: 500000,
-            orbitVel: 100000,
-            initialTemp: 100
-        }
-
-        for (let i = 0; i < config.bodyCount; i++) {
+        for (let i = 0; i < settings.bodyCount; i++) {
             const entity = this.world.createEntity()
 
-            const r = config.radiusMin + Math.random() * (config.radiusMax - config.radiusMin)
+            const r = settings.radiusMin + Math.random() * (settings.radiusMax - settings.radiusMin)
             const angle = Vec2.randomRay()
             const pos = Vec2.scale(angle, r)
-            const vel = Vec2.rotate(angle, Math.PI / 2).scale((config.orbitVel / r) ** 1.1)
-            const mass = config.massMin + (config.massMax - config.massMin) * Math.random()
+            const vel = Vec2.rotate(angle, Math.PI / 2).scale((settings.orbitVelocity / r) ** 1.1)
+            const mass = settings.massMin + (settings.massMax - settings.massMin) * Math.random()
             const size = PhysicsConfig.bodySize(mass)
 
             this.world.addComponent(entity, Position, pos)
             this.world.addComponent(entity, Velocity, vel)
             this.world.addComponent(entity, Mass, mass)
             this.world.addComponent(entity, Size, size)
-            this.world.addComponent(entity, Temperature, config.initialTemp)
+            this.world.addComponent(entity, Temperature, settings.initialTemp)
         }
+
+        // Update entity count input to match
+        const entityInput = document.getElementById('entityCount') as HTMLInputElement
+        if (entityInput) entityInput.value = String(settings.bodyCount)
 
         this.updateBodyCount()
         this.perfMonitor.reset()
-        console.log(`Reset with ${bodyCount} entities`)
+        console.log(`Reset with ${settings.bodyCount} entities`)
     }
 
     setup(): void {

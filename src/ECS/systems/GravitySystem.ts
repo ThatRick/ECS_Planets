@@ -20,7 +20,7 @@ export const GravitySystem: System = {
         const entities = world.query(Position, Velocity, Mass, Size, Temperature)
         if (entities.length === 0) return
 
-        const { G, heatCapacity, stefanBoltzmann, minTemperature } = PhysicsConfig
+        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
 
         // Cache component lookups for performance
         const positions = new Map<number, Vec2>()
@@ -111,7 +111,7 @@ export const GravitySystem: System = {
 
                 // Weighted average temperature + impact heating
                 const combinedTemp = (winnerTemp * winnerMass + loserTemp * loserMass) / combinedMass
-                const impactHeat = energyLoss / (combinedMass * heatCapacity)
+                const impactHeat = (energyLoss * impactHeatMultiplier) / (combinedMass * heatCapacity)
                 const finalTemp = combinedTemp + impactHeat
 
                 // New size from combined mass

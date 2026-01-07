@@ -217,7 +217,7 @@ export function createGravitySystemParallel(
             const n = entities.length
             if (n === 0) return
 
-            const { G, heatCapacity, stefanBoltzmann, minTemperature } = PhysicsConfig
+            const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
             const s = ensureScratch(n)
             const { posX, posY, velX, velY, mass, size, temp, accX, accY, entityIds } = s
 
@@ -273,7 +273,7 @@ export function createGravitySystemParallel(
                     const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2)
                     const energyLoss = initKE - finalKE
                     const combinedTemp = (temp[winner] * mW + temp[loser] * mL) / combinedMass
-                    const impactHeat = energyLoss / (combinedMass * heatCapacity)
+                    const impactHeat = (energyLoss * impactHeatMultiplier) / (combinedMass * heatCapacity)
 
                     posX[winner] = newPx
                     posY[winner] = newPy
