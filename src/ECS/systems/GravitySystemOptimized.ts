@@ -62,7 +62,7 @@ export const GravitySystemOptimized: System = {
         const n = entities.length
         if (n === 0) return
 
-        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier } = PhysicsConfig
+        const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier, maxImpactTemperature } = PhysicsConfig
 
         // Ensure scratch space
         const s = ensureScratch(n)
@@ -119,7 +119,7 @@ export const GravitySystemOptimized: System = {
                 const newPx = (posX[winner] * mW + posX[loser] * mL) / combinedMass
                 const newPy = (posY[winner] * mW + posY[loser] * mL) / combinedMass
 
-                // Impact heating
+                // Impact heating (capped)
                 const initKE = 0.5 * mW * (velX[winner] ** 2 + velY[winner] ** 2)
                             + 0.5 * mL * (velX[loser] ** 2 + velY[loser] ** 2)
                 const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2)
@@ -134,7 +134,7 @@ export const GravitySystemOptimized: System = {
                 velY[winner] = newVy
                 mass[winner] = combinedMass
                 size[winner] = PhysicsConfig.bodySize(combinedMass)
-                temp[winner] = combinedTemp + impactHeat
+                temp[winner] = Math.min(combinedTemp + impactHeat, maxImpactTemperature)
 
                 mergedIndices.add(loser)
             }

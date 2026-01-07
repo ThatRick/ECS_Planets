@@ -15,6 +15,12 @@ export const PhysicsConfig = {
      * Higher values = more dramatic heating on impact.
      */
     impactHeatMultiplier: 20000,
+    /**
+     * Maximum temperature from impact heating (K).
+     * Caps the temperature rise to prevent T^4 cooling from overshooting.
+     * ~10000K shows bright orange/white coloring.
+     */
+    maxImpactTemperature: 10000,
     /** Stefan-Boltzmann constant (W/m²/K⁴) */
     stefanBoltzmann: 5.670367e-8,
     /** Planet material density (kg/m³) */
