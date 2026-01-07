@@ -289,6 +289,7 @@ export function createGravitySystemParallel(
             accY.fill(0, 0, n)
 
             const useWorkers = workersReady >= numWorkers && n >= minEntitiesForParallel
+            let usedCache = false
 
             if (useWorkers) {
                 // Use pending results from previous frame (if available and matching)
@@ -299,12 +300,18 @@ export function createGravitySystemParallel(
                             accY[i] = pendingAccelerations.accY[i]
                         }
                     }
+                    usedCache = true
                 }
 
                 // Start async computation for next frame
                 startAsyncComputation(posX, posY, mass, n, G)
                 lastEntityCount = n
-            } else {
+            }
+
+            // Fall back to synchronous calculation if:
+            // - Workers not ready/enabled, OR
+            // - No valid cached result available (first frame or entity count changed)
+            if (!useWorkers || !usedCache) {
                 // Single-threaded fallback (using Newton's 3rd law optimization)
                 for (let i = 0; i < n; i++) {
                     if (mergedIndices.has(i)) continue
