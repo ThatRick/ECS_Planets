@@ -8,7 +8,7 @@ import {
     Temperature,
     CameraComponent,
     PhysicsConfig,
-    GravitySystem,
+    GravitySystemOptimized,
     createCameraMovementSystem,
     createPlanetRenderer
 } from './ECS/index.js'
@@ -96,7 +96,7 @@ export default class App {
 
         // Register systems
         // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystem)
+        world.registerSystem(GravitySystemOptimized)
 
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas))

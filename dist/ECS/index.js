@@ -7,4 +7,6 @@ export { Position, Velocity, Mass, Size, Temperature, CameraComponent } from './
 export { SpatialHash } from './SpatialHash.js';
 export { PhysicsConfig } from './PhysicsConfig.js';
 // Systems
-export { GravitySystem, MovementSystem, createCameraMovementSystem, createPlanetRenderer } from './systems/index.js';
+export { GravitySystem, GravitySystemOptimized, MovementSystem, createCameraMovementSystem, createPlanetRenderer } from './systems/index.js';
+// High-performance storage
+export { ScalarStore, Vec2Store, EntityManager, PhysicsScratch } from './ComponentStore.js';
