@@ -129,6 +129,9 @@ export function createGravitySystemParallel(
     let pendingAccelerations: PendingResult | null = null
     let lastEntityCount = 0
 
+    // Generation counter to prevent race conditions when frames overlap
+    let currentGeneration = 0
+
     for (let i = 0; i < numWorkers; i++) {
         const worker = new Worker(workerUrl)
         worker.onmessage = (e) => {
@@ -139,10 +142,6 @@ export function createGravitySystemParallel(
         workers.push(worker)
     }
 
-    // Results accumulator for current computation
-    let resultsReceived = 0
-    let expectedResults = 0
-
     function startAsyncComputation(
         posX: Float64Array,
         posY: Float64Array,
@@ -150,8 +149,11 @@ export function createGravitySystemParallel(
         n: number,
         G: number
     ): void {
-        resultsReceived = 0
-        expectedResults = Math.min(workers.length, Math.ceil(n / 100))
+        // Increment generation to invalidate any in-flight computations
+        const generation = ++currentGeneration
+
+        const expectedResults = Math.min(workers.length, Math.ceil(n / 100))
+        let resultsReceived = 0
 
         const newAccX = new Float64Array(n)
         const newAccY = new Float64Array(n)
@@ -169,6 +171,14 @@ export function createGravitySystemParallel(
             // One-time handler for this computation
             const handler = (e: MessageEvent) => {
                 if (e.data.type === 'result') {
+                    // Remove handler immediately to prevent double-firing
+                    worker.removeEventListener('message', handler)
+
+                    // Ignore results from stale computations
+                    if (generation !== currentGeneration) {
+                        return
+                    }
+
                     // Copy results into accumulator
                     const { accX: resultAccX, accY: resultAccY, startIdx: rStart } = e.data
                     for (let i = 0; i < resultAccX.length; i++) {
@@ -181,8 +191,6 @@ export function createGravitySystemParallel(
                         // All results received - store for next frame
                         pendingAccelerations = { accX: newAccX, accY: newAccY }
                     }
-
-                    worker.removeEventListener('message', handler)
                 }
             }
 

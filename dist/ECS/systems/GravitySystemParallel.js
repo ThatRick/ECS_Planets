@@ -98,6 +98,8 @@ export function createGravitySystemParallel(workerCount, minEntitiesForParallel 
     // Double buffer for async results
     let pendingAccelerations = null;
     let lastEntityCount = 0;
+    // Generation counter to prevent race conditions when frames overlap
+    let currentGeneration = 0;
     for (let i = 0; i < numWorkers; i++) {
         const worker = new Worker(workerUrl);
         worker.onmessage = (e) => {
@@ -107,12 +109,11 @@ export function createGravitySystemParallel(workerCount, minEntitiesForParallel 
         };
         workers.push(worker);
     }
-    // Results accumulator for current computation
-    let resultsReceived = 0;
-    let expectedResults = 0;
     function startAsyncComputation(posX, posY, mass, n, G) {
-        resultsReceived = 0;
-        expectedResults = Math.min(workers.length, Math.ceil(n / 100));
+        // Increment generation to invalidate any in-flight computations
+        const generation = ++currentGeneration;
+        const expectedResults = Math.min(workers.length, Math.ceil(n / 100));
+        let resultsReceived = 0;
         const newAccX = new Float64Array(n);
         const newAccY = new Float64Array(n);
         const chunkSize = Math.ceil(n / expectedResults);
@@ -125,6 +126,12 @@ export function createGravitySystemParallel(workerCount, minEntitiesForParallel 
             // One-time handler for this computation
             const handler = (e) => {
                 if (e.data.type === 'result') {
+                    // Remove handler immediately to prevent double-firing
+                    worker.removeEventListener('message', handler);
+                    // Ignore results from stale computations
+                    if (generation !== currentGeneration) {
+                        return;
+                    }
                     // Copy results into accumulator
                     const { accX: resultAccX, accY: resultAccY, startIdx: rStart } = e.data;
                     for (let i = 0; i < resultAccX.length; i++) {
@@ -136,7 +143,6 @@ export function createGravitySystemParallel(workerCount, minEntitiesForParallel 
                         // All results received - store for next frame
                         pendingAccelerations = { accX: newAccX, accY: newAccY };
                     }
-                    worker.removeEventListener('message', handler);
                 }
             };
             worker.addEventListener('message', handler);
