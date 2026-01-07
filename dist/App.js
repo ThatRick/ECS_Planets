@@ -1,5 +1,5 @@
 import Vec2 from './lib/Vector2.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystem, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
 export default class App {
     canvas;
     world;
@@ -68,7 +68,7 @@ export default class App {
         }
         // Register systems
         // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystem);
+        world.registerSystem(GravitySystemOptimized);
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas));
         world.registerSystem(createPlanetRenderer(this.canvas));
