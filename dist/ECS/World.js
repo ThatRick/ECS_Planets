@@ -178,7 +178,8 @@ export class World {
             if (this.pendingRemoval.size > 0) {
                 return cache.entities.filter(id => !this.pendingRemoval.has(id));
             }
-            return cache.entities;
+            // Return a copy to prevent callers from corrupting the cache
+            return cache.entities.slice();
         }
         // Recompute query
         const result = this.computeQuery(keys);
@@ -190,7 +191,8 @@ export class World {
         else {
             this.queryCache.set(cacheKey, { entities: result, dirty: false });
         }
-        return result;
+        // Return a copy to prevent callers from corrupting the cache
+        return result.slice();
     }
     computeQuery(keys) {
         // Find the smallest component storage for initial iteration
