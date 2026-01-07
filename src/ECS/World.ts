@@ -340,6 +340,24 @@ export class World {
         }
     }
 
+    unregisterSystem(name: string): boolean {
+        // Check simulation systems
+        const simIdx = this.simulationSystems.findIndex(s => s.name === name)
+        if (simIdx !== -1) {
+            this.simulationSystems.splice(simIdx, 1)
+            return true
+        }
+
+        // Check visual systems
+        const visIdx = this.visualSystems.findIndex(s => s.name === name)
+        if (visIdx !== -1) {
+            this.visualSystems.splice(visIdx, 1)
+            return true
+        }
+
+        return false
+    }
+
     // ==================== Events ====================
 
     on<T extends WorldEvent>(event: T, callback: EventCallback<T>): void {
