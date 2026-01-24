@@ -1,9 +1,8 @@
 import Vec2 from './lib/Vector2.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystem, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, DEFAULT_SETTINGS } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
-    'original': GravitySystem,
     'optimized': GravitySystemOptimized,
     'barnes-hut': GravitySystemBarnesHut
 };
@@ -55,7 +54,6 @@ export default class App {
         const gravitySelect = document.createElement('select');
         gravitySelect.id = 'gravitySelect';
         gravitySelect.innerHTML = `
-            <option value="original">O(n²) Original</option>
             <option value="optimized" selected>O(n²) Optimized</option>
             <option value="barnes-hut">O(n log n) Barnes-Hut</option>
         `;

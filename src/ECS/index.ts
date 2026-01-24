@@ -22,19 +22,8 @@ export { QuadTree, Body } from './QuadTree.js'
 
 // Systems
 export {
-    GravitySystem,
     GravitySystemOptimized,
     GravitySystemBarnesHut,
-    createGravitySystemParallel,
-    MovementSystem,
     createCameraMovementSystem,
     createPlanetRenderer
 } from './systems/index.js'
-
-// High-performance storage
-export {
-    ScalarStore,
-    Vec2Store,
-    EntityManager,
-    PhysicsScratch
-} from './ComponentStore.js'
