@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { World } from '../World'
-import { GravitySystem } from './GravitySystem'
+import { GravitySystemOptimized } from './GravitySystemOptimized'
 import { Position, Velocity, Mass, Size, Temperature } from '../Components'
 import { PhysicsConfig } from '../PhysicsConfig'
 import Vec2 from '../../lib/Vector2'
 
-describe('GravitySystem', () => {
+describe('GravitySystemOptimized', () => {
     let world: World
 
     beforeEach(() => {
@@ -43,7 +43,7 @@ describe('GravitySystem', () => {
             const e2 = createBody(10000, 0, 0, 0, 1e14)
 
             // Run one physics step
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
 
             const v1 = world.getComponent(e1, Velocity)!
             const v2 = world.getComponent(e2, Velocity)!
@@ -63,7 +63,7 @@ describe('GravitySystem', () => {
 
             // Run multiple steps
             for (let i = 0; i < 10; i++) {
-                GravitySystem.update(world, 0.1)
+                GravitySystemOptimized.update(world, 0.1)
             }
 
             const v1 = world.getComponent(e1, Velocity)!
@@ -81,7 +81,7 @@ describe('GravitySystem', () => {
             const e1Close = createBody(0, 0, 0, 0, 1e14)
             const e2Close = createBody(5000, 0, 0, 0, 1e14) // Far enough to not collide
 
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
             const closeAccel = Math.abs(world.getComponent(e1Close, Velocity)!.x)
 
             // Setup 2: Far bodies (new world to avoid interference)
@@ -106,7 +106,7 @@ describe('GravitySystem', () => {
             world2.addComponent(e2Far, Size, PhysicsConfig.bodySize(1e14))
             world2.addComponent(e2Far, Temperature, 100)
 
-            GravitySystem.update(world2, 1.0)
+            GravitySystemOptimized.update(world2, 1.0)
             const farAccel = Math.abs(world2.getComponent(e1Far, Velocity)!.x)
 
             // At 10x distance, force should be ~100x weaker (inverse square)
@@ -125,7 +125,7 @@ describe('GravitySystem', () => {
 
             const initialCount = world.getEntityCount()
 
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
             world.flush()
 
             expect(world.getEntityCount()).toBe(initialCount - 1)
@@ -139,7 +139,7 @@ describe('GravitySystem', () => {
             const e1 = createBody(0, 0, 0, 0, mass1)
             const e2 = createBody(100, 0, 0, 0, mass2)
 
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
             world.flush()
 
             // Find surviving entity
@@ -161,7 +161,7 @@ describe('GravitySystem', () => {
             createBody(0, 0, v1, 0, mass1)
             createBody(100, 0, v2, 0, mass2)
 
-            GravitySystem.update(world, 0.01) // Small dt to ensure collision
+            GravitySystemOptimized.update(world, 0.01) // Small dt to ensure collision
             world.flush()
 
             const survivors = world.query(Velocity, Mass)
@@ -180,7 +180,7 @@ describe('GravitySystem', () => {
             createBody(0, 0, 1000, 0, 1e14, initialTemp)
             createBody(100, 0, -1000, 0, 1e14, initialTemp) // Head-on collision
 
-            GravitySystem.update(world, 0.01)
+            GravitySystemOptimized.update(world, 0.01)
             world.flush()
 
             const survivors = world.query(Temperature)
@@ -197,7 +197,7 @@ describe('GravitySystem', () => {
             createBody(0, 0, 0, 0, mass1)
             createBody(100, 0, 0, 0, mass2)
 
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
             world.flush()
 
             const survivors = world.query(Size, Mass)
@@ -217,7 +217,7 @@ describe('GravitySystem', () => {
 
             // Run many steps to see cooling
             for (let i = 0; i < 100; i++) {
-                GravitySystem.update(world, 1.0)
+                GravitySystemOptimized.update(world, 1.0)
             }
 
             const finalTemp = world.getComponent(entity, Temperature)!
@@ -229,7 +229,7 @@ describe('GravitySystem', () => {
 
             // Run many steps
             for (let i = 0; i < 1000; i++) {
-                GravitySystem.update(world, 1.0)
+                GravitySystemOptimized.update(world, 1.0)
             }
 
             const finalTemp = world.getComponent(entity, Temperature)!
@@ -243,7 +243,7 @@ describe('GravitySystem', () => {
             const hotInitial = world.getComponent(hotEntity, Temperature)!
             const coolInitial = world.getComponent(coolEntity, Temperature)!
 
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
 
             const hotFinal = world.getComponent(hotEntity, Temperature)!
             const coolFinal = world.getComponent(coolEntity, Temperature)!
@@ -282,7 +282,7 @@ describe('GravitySystem', () => {
 
             // Run for many steps (fraction of an orbit)
             for (let i = 0; i < 100; i++) {
-                GravitySystem.update(world, 0.1)
+                GravitySystemOptimized.update(world, 0.1)
             }
 
             const finalEnergy = calcEnergy()
@@ -298,7 +298,7 @@ describe('GravitySystem', () => {
             const entity = createBody(0, 0, 100, 0, 1e14)
 
             // Should not throw
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
 
             // Velocity should be unchanged (no other bodies to attract)
             const vel = world.getComponent(entity, Velocity)!
@@ -307,7 +307,7 @@ describe('GravitySystem', () => {
 
         it('should handle empty world', () => {
             // Should not throw
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
         })
 
         it('should handle multiple simultaneous collisions', () => {
@@ -318,7 +318,7 @@ describe('GravitySystem', () => {
             createBody(50, 50, 0, 0, 1e14)
 
             // Should merge without errors
-            GravitySystem.update(world, 1.0)
+            GravitySystemOptimized.update(world, 1.0)
             world.flush()
 
             // At least some should have merged

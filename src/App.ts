@@ -8,7 +8,6 @@ import {
     Temperature,
     CameraComponent,
     PhysicsConfig,
-    GravitySystem,
     GravitySystemOptimized,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
@@ -18,10 +17,9 @@ import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor
 import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 
-type GravityType = 'original' | 'optimized' | 'barnes-hut'
+type GravityType = 'optimized' | 'barnes-hut'
 
 const GRAVITY_SYSTEMS: Record<GravityType, System> = {
-    'original': GravitySystem,
     'optimized': GravitySystemOptimized,
     'barnes-hut': GravitySystemBarnesHut
 }
@@ -82,7 +80,6 @@ export default class App {
         const gravitySelect = document.createElement('select')
         gravitySelect.id = 'gravitySelect'
         gravitySelect.innerHTML = `
-            <option value="original">O(n²) Original</option>
             <option value="optimized" selected>O(n²) Optimized</option>
             <option value="barnes-hut">O(n log n) Barnes-Hut</option>
         `

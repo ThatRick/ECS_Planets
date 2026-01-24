@@ -1,7 +1,4 @@
-export { GravitySystem } from './GravitySystem.js'
 export { GravitySystemOptimized } from './GravitySystemOptimized.js'
 export { GravitySystemBarnesHut } from './GravitySystemBarnesHut.js'
-export { createGravitySystemParallel } from './GravitySystemParallel.js'
-export { MovementSystem } from './MovementSystem.js'
 export { createCameraMovementSystem } from './CameraMovementSystem.js'
 export { createPlanetRenderer } from './PlanetRenderer.js'
