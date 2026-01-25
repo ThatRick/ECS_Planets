@@ -14,7 +14,7 @@ export default class App {
     world;
     bodyCountEl;
     perfMonitor;
-    currentGravityType = 'optimized';
+    currentGravityType = 'barnes-hut';
     currentRenderer = 'canvas';
     isRunning = false;
     playPauseBtn;
@@ -201,7 +201,7 @@ export default class App {
         }
         // Register systems
         // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystemOptimized);
+        world.registerSystem(GravitySystemBarnesHut);
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas));
         // Use WebGL renderer if available, fallback to Canvas 2D
