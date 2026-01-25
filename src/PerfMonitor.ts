@@ -239,12 +239,13 @@ export function createPerfOverlay(): HTMLElement {
         </div>
     `
 
-    // Setup close button
-    setTimeout(() => {
-        document.getElementById('perf-close')?.addEventListener('click', () => {
+    // Setup close button using querySelector on the overlay
+    const closeBtn = overlay.querySelector('#perf-close')
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
             overlay.classList.add('hidden')
         })
-    }, 0)
+    }
 
     return overlay
 }

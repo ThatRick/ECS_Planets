@@ -190,22 +190,37 @@ export default class App {
     }
     bindControls() {
         // Play/Pause button
-        this.playPauseBtn?.addEventListener('click', () => this.togglePlayPause());
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        if (playPauseBtn) {
+            playPauseBtn.addEventListener('click', () => this.togglePlayPause());
+        }
         // Time controls
-        document.getElementById('slowerButton')?.addEventListener('click', () => {
-            this.world.timeFactor *= 0.5;
-        });
-        document.getElementById('fasterButton')?.addEventListener('click', () => {
-            this.world.timeFactor *= 2;
-        });
+        const slowerBtn = document.getElementById('slowerButton');
+        if (slowerBtn) {
+            slowerBtn.addEventListener('click', () => {
+                this.world.timeFactor *= 0.5;
+            });
+        }
+        const fasterBtn = document.getElementById('fasterButton');
+        if (fasterBtn) {
+            fasterBtn.addEventListener('click', () => {
+                this.world.timeFactor *= 2;
+            });
+        }
         // Settings button
-        document.getElementById('settingsBtn')?.addEventListener('click', () => {
-            toggleSettingsPanel();
-        });
+        const settingsBtn = document.getElementById('settingsBtn');
+        if (settingsBtn) {
+            settingsBtn.addEventListener('click', () => {
+                toggleSettingsPanel();
+            });
+        }
         // Performance button
-        document.getElementById('perfBtn')?.addEventListener('click', () => {
-            togglePerfOverlay();
-        });
+        const perfBtn = document.getElementById('perfBtn');
+        if (perfBtn) {
+            perfBtn.addEventListener('click', () => {
+                togglePerfOverlay();
+            });
+        }
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             // Ignore if typing in an input

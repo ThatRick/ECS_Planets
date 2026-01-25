@@ -3,7 +3,7 @@
  * Toggle with 'S' key or settings button
  */
 
-import type { GravityType } from './App.js'
+import type { GravityType } from './types.js'
 
 export interface SimSettings {
     bodyCount: number
@@ -256,25 +256,30 @@ export function createSettingsPanel(
         </div>
     `
 
-    // Setup close button
-    setTimeout(() => {
-        document.getElementById('settings-close')?.addEventListener('click', () => {
+    // Setup event listeners using querySelector on the panel
+    const closeBtn = panel.querySelector('#settings-close')
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
             panel.classList.add('hidden')
         })
+    }
 
-        // Setup gravity algorithm change (instant, no reset needed)
-        const gravitySelect = document.getElementById('set-gravityAlgo') as HTMLSelectElement
-        gravitySelect?.addEventListener('change', () => {
+    // Setup gravity algorithm change (instant, no reset needed)
+    const gravitySelect = panel.querySelector('#set-gravityAlgo') as HTMLSelectElement
+    if (gravitySelect) {
+        gravitySelect.addEventListener('change', () => {
             onGravityChange(gravitySelect.value as GravityType)
         })
+    }
 
-        // Setup apply button
-        const applyBtn = document.getElementById('settings-apply')
-        applyBtn?.addEventListener('click', () => {
+    // Setup apply button
+    const applyBtn = panel.querySelector('#settings-apply')
+    if (applyBtn) {
+        applyBtn.addEventListener('click', () => {
             const settings = getSettingsFromPanel()
             onApply(settings)
         })
-    }, 0)
+    }
 
     return panel
 }
