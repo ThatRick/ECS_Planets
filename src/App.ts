@@ -16,7 +16,7 @@ import {
     isWebGL2Available
 } from './ECS/index.js'
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js'
-import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS, toggleSettingsPanel, updateSettingsPanelValues } from './SettingsPanel.js'
+import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 
 export type GravityType = 'optimized' | 'barnes-hut'
@@ -26,6 +26,10 @@ const GRAVITY_SYSTEMS: Record<GravityType, System> = {
     'optimized': GravitySystemOptimized,
     'barnes-hut': GravitySystemBarnesHut
 }
+
+// Unit conversions (matching SettingsPanel)
+const KM_TO_M = 1000
+const MASS_UNIT = 1e14
 
 export default class App {
     canvas: HTMLCanvasElement
@@ -103,6 +107,44 @@ export default class App {
         this.perfMonitor.reset()
     }
 
+    /**
+     * Calculate initial velocity based on mode
+     */
+    private calculateVelocity(
+        pos: Vec2,
+        r: number,
+        mode: VelocityMode,
+        scale: number,
+        totalMass: number
+    ): Vec2 {
+        switch (mode) {
+            case 'orbital': {
+                // Keplerian orbital velocity: v = sqrt(G * M / r)
+                // Scale adjusts how circular the orbit is (1.0 = circular)
+                const G = PhysicsConfig.G
+                const orbitalSpeed = Math.sqrt(G * totalMass / r) * scale
+                // Perpendicular to radius
+                const angle = Math.atan2(pos.y, pos.x)
+                return new Vec2(
+                    -Math.sin(angle) * orbitalSpeed,
+                    Math.cos(angle) * orbitalSpeed
+                )
+            }
+            case 'collapse': {
+                // Random velocity scaled by distance (more uniform cloud)
+                // Small random velocities for interesting collapse dynamics
+                const maxSpeed = Math.sqrt(r) * scale * 0.5
+                return new Vec2(
+                    (Math.random() - 0.5) * maxSpeed,
+                    (Math.random() - 0.5) * maxSpeed
+                )
+            }
+            case 'static':
+            default:
+                return new Vec2(0, 0)
+        }
+    }
+
     private resetSimulation(settings: SimSettings): void {
         // Clear all entities except camera
         const entities = this.world.query(Position, Velocity, Mass)
@@ -111,13 +153,27 @@ export default class App {
         }
         this.world.flush()
 
+        // Estimate total mass for orbital calculations
+        const avgMass = (settings.massMin + settings.massMax) / 2
+        const totalMass = avgMass * settings.bodyCount
+
         for (let i = 0; i < settings.bodyCount; i++) {
             const entity = this.world.createEntity()
 
+            // Random position in annulus (ring between radiusMin and radiusMax)
             const r = settings.radiusMin + Math.random() * (settings.radiusMax - settings.radiusMin)
-            const angle = Vec2.randomRay()
-            const pos = Vec2.scale(angle, r)
-            const vel = Vec2.rotate(angle, Math.PI / 2).scale((settings.orbitVelocity / r) ** 1.1)
+            const angle = Math.random() * Math.PI * 2
+            const pos = new Vec2(Math.cos(angle) * r, Math.sin(angle) * r)
+
+            // Calculate velocity based on mode
+            const vel = this.calculateVelocity(
+                pos, r,
+                settings.velocityMode,
+                settings.velocityScale,
+                totalMass
+            )
+
+            // Random mass
             const mass = settings.massMin + (settings.massMax - settings.massMin) * Math.random()
             const size = PhysicsConfig.bodySize(mass)
 
@@ -128,9 +184,16 @@ export default class App {
             this.world.addComponent(entity, Temperature, settings.initialTemp)
         }
 
+        // Update camera zoom based on new radius
+        const cameraEntity = this.world.querySingle(CameraComponent)
+        if (cameraEntity !== undefined) {
+            const camera = this.world.getComponent(cameraEntity, CameraComponent)!
+            camera.zoom = this.canvas.height / settings.radiusMax * 0.4
+        }
+
         this.updateBodyCount()
         this.perfMonitor.reset()
-        console.log(`Reset with ${settings.bodyCount} entities`)
+        console.log(`Reset: ${settings.bodyCount} bodies, mode=${settings.velocityMode}, scale=${settings.velocityScale}`)
     }
 
     private updateRendererBadge(): void {
@@ -163,14 +226,15 @@ export default class App {
         const { width, height } = this.canvas
         const world = this.world
 
-        // Configuration
-        const config = {
+        // Initial configuration (matching DEFAULT_SETTINGS in SettingsPanel)
+        const config: SimSettings = {
             bodyCount: 300,
-            massMin: 1e14,
-            massMax: 4e14,
-            radiusMin: 10000,
-            radiusMax: 500000,
-            orbitVel: 100000,
+            radiusMin: 10 * KM_TO_M,      // 10 km in meters
+            radiusMax: 500 * KM_TO_M,     // 500 km in meters
+            massMin: 1 * MASS_UNIT,       // 1 × 10¹⁴ kg
+            massMax: 4 * MASS_UNIT,       // 4 × 10¹⁴ kg
+            velocityMode: 'collapse',
+            velocityScale: 0.3,
             initialTemp: 100
         }
 
@@ -180,22 +244,30 @@ export default class App {
         // Create camera entity
         const cameraEntity = world.createEntity()
         world.addComponent(cameraEntity, CameraComponent, {
-            zoom: height / config.radiusMax * 0.5,
+            zoom: height / config.radiusMax * 0.4,
             offset: new Vec2(width / 2, height / 2)
         })
+
+        // Estimate total mass for orbital calculations
+        const avgMass = (config.massMin + config.massMax) / 2
+        const totalMass = avgMass * config.bodyCount
 
         // Create planet entities
         for (let i = 0; i < config.bodyCount; i++) {
             const entity = world.createEntity()
 
-            // Random position in disk
+            // Random position in annulus
             const r = config.radiusMin + Math.random() * (config.radiusMax - config.radiusMin)
-            const angle = Vec2.randomRay()
-            const pos = Vec2.scale(angle, r)
+            const angle = Math.random() * Math.PI * 2
+            const pos = new Vec2(Math.cos(angle) * r, Math.sin(angle) * r)
 
-            // Velocity perpendicular to radius for quasi-orbital motion
-            // Using r^(-1.1) for slightly steeper than circular orbit
-            const vel = Vec2.rotate(angle, Math.PI / 2).scale((config.orbitVel / r) ** 1.1)
+            // Calculate velocity based on mode
+            const vel = this.calculateVelocity(
+                pos, r,
+                config.velocityMode,
+                config.velocityScale,
+                totalMass
+            )
 
             // Random mass
             const mass = config.massMin + (config.massMax - config.massMin) * Math.random()
@@ -232,17 +304,9 @@ export default class App {
         this.updateBodyCount()
 
         // Update settings panel with initial values
-        updateSettingsPanelValues({
-            bodyCount: config.bodyCount,
-            radiusMin: config.radiusMin,
-            radiusMax: config.radiusMax,
-            massMin: config.massMin,
-            massMax: config.massMax,
-            orbitVelocity: config.orbitVel,
-            initialTemp: config.initialTemp
-        })
+        updateSettingsPanelValues(config)
 
-        console.log(`Created ${config.bodyCount} planets`)
+        console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode)`)
     }
 
     private bindControls(): void {

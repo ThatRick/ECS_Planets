@@ -4,13 +4,17 @@
  */
 export const DEFAULT_SETTINGS = {
     bodyCount: 300,
-    radiusMin: 10000,
-    radiusMax: 500000,
-    massMin: 1e14,
-    massMax: 4e14,
-    orbitVelocity: 100000,
+    radiusMin: 10, // 10 km
+    radiusMax: 500, // 500 km
+    massMin: 1, // displayed as 1 (×10¹⁴ kg)
+    massMax: 4, // displayed as 4 (×10¹⁴ kg)
+    velocityMode: 'collapse',
+    velocityScale: 0.3,
     initialTemp: 100
 };
+// Unit conversions
+const KM_TO_M = 1000;
+const MASS_UNIT = 1e14; // 10¹⁴ kg
 export function createSettingsPanel(onApply, onGravityChange) {
     const panel = document.createElement('div');
     panel.id = 'settings-panel';
@@ -29,7 +33,7 @@ export function createSettingsPanel(onApply, onGravityChange) {
                 padding: 0;
                 border-radius: 10px;
                 z-index: 1000;
-                min-width: 260px;
+                min-width: 280px;
                 max-width: calc(100vw - 20px);
                 max-height: calc(100vh - 80px);
                 max-height: calc(100dvh - 80px);
@@ -103,6 +107,10 @@ export function createSettingsPanel(onApply, onGravityChange) {
                 font-size: 11px;
                 margin-bottom: 4px;
             }
+            #settings-panel .unit {
+                color: #666;
+                font-size: 10px;
+            }
             #settings-panel input,
             #settings-panel select {
                 width: 100%;
@@ -160,6 +168,43 @@ export function createSettingsPanel(onApply, onGravityChange) {
                 text-align: center;
                 margin-top: 12px;
             }
+            #settings-panel .mode-desc {
+                color: #666;
+                font-size: 10px;
+                margin-top: 4px;
+                line-height: 1.4;
+            }
+            #settings-panel input[type="range"] {
+                padding: 0;
+                height: 6px;
+                -webkit-appearance: none;
+                background: #333;
+                border: none;
+                border-radius: 3px;
+            }
+            #settings-panel input[type="range"]::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 16px;
+                height: 16px;
+                border-radius: 50%;
+                background: #0af;
+                cursor: pointer;
+            }
+            #settings-panel .range-value {
+                display: inline-block;
+                min-width: 40px;
+                text-align: right;
+                color: #8cf;
+                font-weight: 500;
+            }
+            #settings-panel .range-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            #settings-panel .range-row input {
+                flex: 1;
+            }
 
             @media (max-width: 600px) {
                 #settings-panel {
@@ -175,7 +220,7 @@ export function createSettingsPanel(onApply, onGravityChange) {
                 #settings-panel input,
                 #settings-panel select {
                     padding: 10px 12px;
-                    font-size: 16px; /* Prevent zoom on iOS */
+                    font-size: 16px;
                 }
             }
         </style>
@@ -189,45 +234,65 @@ export function createSettingsPanel(onApply, onGravityChange) {
                 <div class="field">
                     <label>Gravity Algorithm</label>
                     <select id="set-gravityAlgo">
-                        <option value="optimized" selected>O(n²) Optimized</option>
+                        <option value="optimized" selected>O(n²) Direct</option>
                         <option value="barnes-hut">O(n log n) Barnes-Hut</option>
                     </select>
                 </div>
                 <div class="field">
-                    <label>Body Count</label>
-                    <input type="number" id="set-bodyCount" value="${DEFAULT_SETTINGS.bodyCount}" min="10" max="5000" step="50">
+                    <label>Number of Bodies</label>
+                    <input type="number" id="set-bodyCount" value="${DEFAULT_SETTINGS.bodyCount}" min="10" max="5000" step="10">
                 </div>
             </div>
 
             <div class="section">
-                <div class="section-title">Distribution</div>
-                <div class="row">
-                    <div class="field">
-                        <label>Radius Min</label>
-                        <input type="number" id="set-radiusMin" value="${DEFAULT_SETTINGS.radiusMin}" min="1000" step="1000">
-                    </div>
-                    <div class="field">
-                        <label>Radius Max</label>
-                        <input type="number" id="set-radiusMax" value="${DEFAULT_SETTINGS.radiusMax}" min="10000" step="10000">
+                <div class="section-title">Initial Velocity</div>
+                <div class="field">
+                    <label>Mode</label>
+                    <select id="set-velocityMode">
+                        <option value="collapse">Cloud Collapse</option>
+                        <option value="orbital">Orbital (around center)</option>
+                        <option value="static">Static (no velocity)</option>
+                    </select>
+                    <div class="mode-desc" id="velocity-mode-desc">Random slow velocities - bodies collapse under gravity</div>
+                </div>
+                <div class="field" id="velocity-scale-field">
+                    <label>Velocity Scale</label>
+                    <div class="range-row">
+                        <input type="range" id="set-velocityScale" value="0.3" min="0" max="1.5" step="0.05">
+                        <span class="range-value" id="velocity-scale-value">0.3</span>
                     </div>
                 </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Spawn Area</div>
                 <div class="row">
                     <div class="field">
-                        <label>Mass Min (×10¹⁴)</label>
-                        <input type="number" id="set-massMin" value="1" min="0.1" step="0.1">
+                        <label>Inner Radius <span class="unit">(km)</span></label>
+                        <input type="number" id="set-radiusMin" value="${DEFAULT_SETTINGS.radiusMin}" min="0" step="10">
                     </div>
                     <div class="field">
-                        <label>Mass Max (×10¹⁴)</label>
-                        <input type="number" id="set-massMax" value="4" min="0.1" step="0.1">
+                        <label>Outer Radius <span class="unit">(km)</span></label>
+                        <input type="number" id="set-radiusMax" value="${DEFAULT_SETTINGS.radiusMax}" min="10" step="50">
+                    </div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">Body Properties</div>
+                <div class="row">
+                    <div class="field">
+                        <label>Mass Min <span class="unit">(×10¹⁴ kg)</span></label>
+                        <input type="number" id="set-massMin" value="${DEFAULT_SETTINGS.massMin}" min="0.1" step="0.5">
+                    </div>
+                    <div class="field">
+                        <label>Mass Max <span class="unit">(×10¹⁴ kg)</span></label>
+                        <input type="number" id="set-massMax" value="${DEFAULT_SETTINGS.massMax}" min="0.1" step="0.5">
                     </div>
                 </div>
                 <div class="field">
-                    <label>Orbit Velocity</label>
-                    <input type="number" id="set-orbitVelocity" value="${DEFAULT_SETTINGS.orbitVelocity}" min="1000" step="10000">
-                </div>
-                <div class="field">
-                    <label>Initial Temperature (K)</label>
-                    <input type="number" id="set-initialTemp" value="${DEFAULT_SETTINGS.initialTemp}" min="3" step="100">
+                    <label>Temperature <span class="unit">(K)</span></label>
+                    <input type="number" id="set-initialTemp" value="${DEFAULT_SETTINGS.initialTemp}" min="3" step="50">
                 </div>
             </div>
 
@@ -235,21 +300,48 @@ export function createSettingsPanel(onApply, onGravityChange) {
             <div class="hint">Press S to toggle • Space to play/pause</div>
         </div>
     `;
-    // Setup event listeners using querySelector on the panel
+    // Setup event listeners
     const closeBtn = panel.querySelector('#settings-close');
     if (closeBtn) {
         closeBtn.addEventListener('click', () => {
             panel.classList.add('hidden');
         });
     }
-    // Setup gravity algorithm change (instant, no reset needed)
+    // Gravity algorithm change
     const gravitySelect = panel.querySelector('#set-gravityAlgo');
     if (gravitySelect) {
         gravitySelect.addEventListener('change', () => {
             onGravityChange(gravitySelect.value);
         });
     }
-    // Setup apply button
+    // Velocity mode change - update description
+    const velocityModeSelect = panel.querySelector('#set-velocityMode');
+    const modeDesc = panel.querySelector('#velocity-mode-desc');
+    const velocityScaleField = panel.querySelector('#velocity-scale-field');
+    const modeDescriptions = {
+        'collapse': 'Random slow velocities - bodies collapse under gravity',
+        'orbital': 'Circular orbits around center - velocity depends on distance',
+        'static': 'No initial velocity - pure gravitational collapse'
+    };
+    if (velocityModeSelect && modeDesc) {
+        velocityModeSelect.addEventListener('change', () => {
+            const mode = velocityModeSelect.value;
+            modeDesc.textContent = modeDescriptions[mode];
+            // Hide velocity scale for static mode
+            if (velocityScaleField) {
+                velocityScaleField.style.display = mode === 'static' ? 'none' : 'block';
+            }
+        });
+    }
+    // Velocity scale slider
+    const velocityScaleSlider = panel.querySelector('#set-velocityScale');
+    const velocityScaleValue = panel.querySelector('#velocity-scale-value');
+    if (velocityScaleSlider && velocityScaleValue) {
+        velocityScaleSlider.addEventListener('input', () => {
+            velocityScaleValue.textContent = velocityScaleSlider.value;
+        });
+    }
+    // Apply button
     const applyBtn = panel.querySelector('#settings-apply');
     if (applyBtn) {
         applyBtn.addEventListener('click', () => {
@@ -264,13 +356,18 @@ export function getSettingsFromPanel() {
         const el = document.getElementById(id);
         return el ? parseFloat(el.value) || fallback : fallback;
     };
+    const getSelect = (id, fallback) => {
+        const el = document.getElementById(id);
+        return el ? el.value : fallback;
+    };
     return {
         bodyCount: getValue('set-bodyCount', DEFAULT_SETTINGS.bodyCount),
-        radiusMin: getValue('set-radiusMin', DEFAULT_SETTINGS.radiusMin),
-        radiusMax: getValue('set-radiusMax', DEFAULT_SETTINGS.radiusMax),
-        massMin: getValue('set-massMin', 1) * 1e14,
-        massMax: getValue('set-massMax', 4) * 1e14,
-        orbitVelocity: getValue('set-orbitVelocity', DEFAULT_SETTINGS.orbitVelocity),
+        radiusMin: getValue('set-radiusMin', DEFAULT_SETTINGS.radiusMin) * KM_TO_M,
+        radiusMax: getValue('set-radiusMax', DEFAULT_SETTINGS.radiusMax) * KM_TO_M,
+        massMin: getValue('set-massMin', DEFAULT_SETTINGS.massMin) * MASS_UNIT,
+        massMax: getValue('set-massMax', DEFAULT_SETTINGS.massMax) * MASS_UNIT,
+        velocityMode: getSelect('set-velocityMode', DEFAULT_SETTINGS.velocityMode),
+        velocityScale: getValue('set-velocityScale', DEFAULT_SETTINGS.velocityScale),
         initialTemp: getValue('set-initialTemp', DEFAULT_SETTINGS.initialTemp)
     };
 }
@@ -294,13 +391,24 @@ export function updateSettingsPanelValues(settings) {
         if (el)
             el.value = String(value);
     };
+    const setSelect = (id, value) => {
+        const el = document.getElementById(id);
+        if (el)
+            el.value = value;
+    };
     setValue('set-bodyCount', settings.bodyCount);
-    setValue('set-radiusMin', settings.radiusMin);
-    setValue('set-radiusMax', settings.radiusMax);
-    setValue('set-massMin', settings.massMin / 1e14);
-    setValue('set-massMax', settings.massMax / 1e14);
-    setValue('set-orbitVelocity', settings.orbitVelocity);
+    setValue('set-radiusMin', settings.radiusMin / KM_TO_M);
+    setValue('set-radiusMax', settings.radiusMax / KM_TO_M);
+    setValue('set-massMin', settings.massMin / MASS_UNIT);
+    setValue('set-massMax', settings.massMax / MASS_UNIT);
+    setSelect('set-velocityMode', settings.velocityMode);
+    setValue('set-velocityScale', settings.velocityScale);
     setValue('set-initialTemp', settings.initialTemp);
+    // Update velocity scale display
+    const velocityScaleValue = document.getElementById('velocity-scale-value');
+    if (velocityScaleValue) {
+        velocityScaleValue.textContent = String(settings.velocityScale);
+    }
 }
 export function setGravityAlgoValue(gravityType) {
     const select = document.getElementById('set-gravityAlgo');
