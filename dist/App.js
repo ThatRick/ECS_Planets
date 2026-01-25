@@ -1,7 +1,7 @@
 import Vec2 from './lib/Vector2.js';
 import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
-import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js';
-import { createSettingsPanel, DEFAULT_SETTINGS } from './SettingsPanel.js';
+import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
+import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
     'optimized': GravitySystemOptimized,
     'barnes-hut': GravitySystemBarnesHut
@@ -12,25 +12,31 @@ export default class App {
     bodyCountEl;
     perfMonitor;
     currentGravityType = 'optimized';
+    currentRenderer = 'canvas';
+    isRunning = false;
+    playPauseBtn;
     constructor(canvas) {
         this.canvas = canvas;
         this.bodyCountEl = document.getElementById('bodyCount');
+        this.playPauseBtn = document.getElementById('playPauseBtn');
         this.perfMonitor = new PerfMonitor();
-        // Add performance overlay
+        // Add performance overlay (hidden by default)
         const overlay = createPerfOverlay();
         document.body.appendChild(overlay);
         this.perfMonitor.onUpdate = updatePerfOverlay;
         // Add settings panel
-        const settingsPanel = createSettingsPanel((settings) => {
-            this.resetSimulation(settings);
-        });
+        const settingsPanel = createSettingsPanel((settings) => this.resetSimulation(settings), (gravityType) => this.switchGravitySystem(gravityType));
         document.body.appendChild(settingsPanel);
         // Set up responsive canvas
         this.resizeCanvas();
         window.addEventListener('resize', () => this.resizeCanvas());
+        // Handle orientation change on mobile
+        window.addEventListener('orientationchange', () => {
+            setTimeout(() => this.resizeCanvas(), 100);
+        });
         this.world = new World(100); // 100 Hz physics
         this.setup();
-        this.setupBenchmarkControls();
+        this.bindControls();
         // Main render loop
         const loop = () => {
             this.update();
@@ -45,51 +51,12 @@ export default class App {
             this.canvas.height = container.clientHeight;
         }
     }
-    setupBenchmarkControls() {
-        // Add benchmark controls to the UI
-        const controls = document.getElementById('controls');
-        if (!controls)
-            return;
-        // Create gravity system selector
-        const gravitySelect = document.createElement('select');
-        gravitySelect.id = 'gravitySelect';
-        gravitySelect.innerHTML = `
-            <option value="optimized" selected>O(n²) Optimized</option>
-            <option value="barnes-hut">O(n log n) Barnes-Hut</option>
-        `;
-        gravitySelect.style.cssText = 'padding: 8px; border-radius: 4px; background: #444; color: #fff; border: none;';
-        gravitySelect.addEventListener('change', () => {
-            this.switchGravitySystem(gravitySelect.value);
-        });
-        // Create entity count input
-        const entityLabel = document.createElement('label');
-        entityLabel.style.cssText = 'color: #888; font-size: 12px;';
-        entityLabel.innerHTML = 'Entities: ';
-        const entityInput = document.createElement('input');
-        entityInput.type = 'number';
-        entityInput.id = 'entityCount';
-        entityInput.value = '300';
-        entityInput.min = '10';
-        entityInput.max = '5000';
-        entityInput.step = '100';
-        entityInput.style.cssText = 'width: 70px; padding: 8px; border-radius: 4px; background: #444; color: #fff; border: none;';
-        // Reset button
-        const resetBtn = document.createElement('button');
-        resetBtn.textContent = 'Reset';
-        resetBtn.addEventListener('click', () => {
-            const count = parseInt(entityInput.value) || 300;
-            this.resetSimulation({ ...DEFAULT_SETTINGS, bodyCount: count });
-        });
-        // Add to controls
-        const separator = document.createElement('span');
-        separator.style.cssText = 'border-left: 1px solid #444; height: 24px; margin: 0 8px;';
-        controls.insertBefore(separator, controls.querySelector('#stats'));
-        controls.insertBefore(gravitySelect, controls.querySelector('#stats'));
-        controls.insertBefore(entityLabel, controls.querySelector('#stats'));
-        entityLabel.appendChild(entityInput);
-        controls.insertBefore(resetBtn, controls.querySelector('#stats'));
+    getGravityType() {
+        return this.currentGravityType;
     }
     switchGravitySystem(type) {
+        if (type === this.currentGravityType)
+            return;
         // Remove current gravity system
         const currentSystem = GRAVITY_SYSTEMS[this.currentGravityType];
         this.world.unregisterSystem(currentSystem.name);
@@ -121,13 +88,33 @@ export default class App {
             this.world.addComponent(entity, Size, size);
             this.world.addComponent(entity, Temperature, settings.initialTemp);
         }
-        // Update entity count input to match
-        const entityInput = document.getElementById('entityCount');
-        if (entityInput)
-            entityInput.value = String(settings.bodyCount);
         this.updateBodyCount();
         this.perfMonitor.reset();
         console.log(`Reset with ${settings.bodyCount} entities`);
+    }
+    updateRendererBadge() {
+        const badge = document.getElementById('rendererBadge');
+        if (badge) {
+            badge.textContent = this.currentRenderer === 'webgl' ? 'WebGL 2' : 'Canvas 2D';
+            badge.className = `renderer-badge ${this.currentRenderer}`;
+        }
+    }
+    updatePlayPauseButton() {
+        if (this.playPauseBtn) {
+            this.playPauseBtn.textContent = this.isRunning ? 'Pause' : 'Start';
+            this.playPauseBtn.classList.toggle('running', this.isRunning);
+        }
+    }
+    togglePlayPause() {
+        if (this.isRunning) {
+            this.world.stop();
+            this.isRunning = false;
+        }
+        else {
+            this.world.start();
+            this.isRunning = true;
+        }
+        this.updatePlayPauseButton();
     }
     setup() {
         const { width, height } = this.canvas;
@@ -177,18 +164,66 @@ export default class App {
         // Use WebGL renderer if available, fallback to Canvas 2D
         if (isWebGL2Available()) {
             world.registerSystem(createPlanetRendererWebGL(this.canvas));
+            this.currentRenderer = 'webgl';
             console.log('Using WebGL 2 renderer');
         }
         else {
             world.registerSystem(createPlanetRenderer(this.canvas));
+            this.currentRenderer = 'canvas';
             console.log('WebGL 2 not available, using Canvas 2D renderer');
         }
-        // Bind UI controls
-        world.bindControls();
+        this.updateRendererBadge();
         // Update body count when entities are removed
         world.on('entityRemoved', () => this.updateBodyCount());
         this.updateBodyCount();
+        // Update settings panel with initial values
+        updateSettingsPanelValues({
+            bodyCount: config.bodyCount,
+            radiusMin: config.radiusMin,
+            radiusMax: config.radiusMax,
+            massMin: config.massMin,
+            massMax: config.massMax,
+            orbitVelocity: config.orbitVel,
+            initialTemp: config.initialTemp
+        });
         console.log(`Created ${config.bodyCount} planets`);
+    }
+    bindControls() {
+        // Play/Pause button
+        this.playPauseBtn?.addEventListener('click', () => this.togglePlayPause());
+        // Time controls
+        document.getElementById('slowerButton')?.addEventListener('click', () => {
+            this.world.timeFactor *= 0.5;
+        });
+        document.getElementById('fasterButton')?.addEventListener('click', () => {
+            this.world.timeFactor *= 2;
+        });
+        // Settings button
+        document.getElementById('settingsBtn')?.addEventListener('click', () => {
+            toggleSettingsPanel();
+        });
+        // Performance button
+        document.getElementById('perfBtn')?.addEventListener('click', () => {
+            togglePerfOverlay();
+        });
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Ignore if typing in an input
+            if (document.activeElement?.tagName === 'INPUT')
+                return;
+            switch (e.key.toLowerCase()) {
+                case ' ':
+                    e.preventDefault();
+                    this.togglePlayPause();
+                    break;
+                case 's':
+                    toggleSettingsPanel();
+                    break;
+                case 'p':
+                    togglePerfOverlay();
+                    break;
+            }
+        });
     }
     updateBodyCount() {
         if (this.bodyCountEl) {

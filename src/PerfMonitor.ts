@@ -129,77 +129,122 @@ export class PerfMonitor {
 export function createPerfOverlay(): HTMLElement {
     const overlay = document.createElement('div')
     overlay.id = 'perf-overlay'
+    overlay.className = 'hidden' // Start hidden
     overlay.innerHTML = `
         <style>
             #perf-overlay {
                 position: fixed;
-                top: 50px;
+                top: 60px;
                 right: 10px;
-                background: rgba(0, 0, 0, 0.8);
+                right: max(10px, env(safe-area-inset-right));
+                background: rgba(20, 20, 22, 0.95);
                 color: #0f0;
-                font-family: 'Courier New', monospace;
+                font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
                 font-size: 12px;
-                padding: 10px;
-                border-radius: 4px;
+                padding: 0;
+                border-radius: 10px;
                 z-index: 1000;
-                min-width: 180px;
-                transition: opacity 0.2s;
+                min-width: 160px;
+                transition: opacity 0.2s, transform 0.2s;
+                box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+                border: 1px solid #333;
             }
             #perf-overlay.hidden {
                 opacity: 0;
                 pointer-events: none;
+                transform: translateX(10px);
+            }
+            #perf-overlay .panel-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 8px 12px;
+                background: #222;
+                border-bottom: 1px solid #333;
+                border-radius: 10px 10px 0 0;
+            }
+            #perf-overlay .panel-header span {
+                font-size: 11px;
+                font-weight: 600;
+                color: #888;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            #perf-overlay .close-btn {
+                background: none;
+                border: none;
+                color: #888;
+                font-size: 18px;
+                cursor: pointer;
+                padding: 0 2px;
+                line-height: 1;
+                transition: color 0.15s;
+            }
+            #perf-overlay .close-btn:hover {
+                color: #fff;
+            }
+            #perf-overlay .panel-content {
+                padding: 10px 12px;
             }
             #perf-overlay .label {
                 color: #888;
             }
             #perf-overlay .value {
                 float: right;
-                font-weight: bold;
+                font-weight: 600;
+                font-variant-numeric: tabular-nums;
             }
-            #perf-overlay .good { color: #0f0; }
+            #perf-overlay .good { color: #4f4; }
             #perf-overlay .warn { color: #ff0; }
-            #perf-overlay .bad { color: #f00; }
+            #perf-overlay .bad { color: #f44; }
             #perf-overlay .row {
-                margin: 2px 0;
+                margin: 4px 0;
                 clear: both;
             }
             #perf-overlay .divider {
                 border-top: 1px solid #333;
-                margin: 6px 0;
+                margin: 8px 0;
             }
-            #perf-overlay .hint {
-                color: #555;
-                font-size: 10px;
-                text-align: center;
-                margin-top: 6px;
+
+            @media (max-width: 600px) {
+                #perf-overlay {
+                    right: 6px;
+                    font-size: 11px;
+                    min-width: 140px;
+                }
             }
         </style>
-        <div class="row">
-            <span class="label">FPS:</span>
-            <span class="value" id="perf-fps">--</span>
+        <div class="panel-header">
+            <span>Performance</span>
+            <button class="close-btn" id="perf-close" aria-label="Close">&times;</button>
         </div>
-        <div class="row">
-            <span class="label">Frame:</span>
-            <span class="value" id="perf-frame">-- ms</span>
+        <div class="panel-content">
+            <div class="row">
+                <span class="label">FPS</span>
+                <span class="value" id="perf-fps">--</span>
+            </div>
+            <div class="row">
+                <span class="label">Frame</span>
+                <span class="value" id="perf-frame">-- ms</span>
+            </div>
+            <div class="row">
+                <span class="label">Physics</span>
+                <span class="value" id="perf-physics">-- ms</span>
+            </div>
+            <div class="divider"></div>
+            <div class="row">
+                <span class="label">Entities</span>
+                <span class="value" id="perf-entities">--</span>
+            </div>
         </div>
-        <div class="row">
-            <span class="label">Physics:</span>
-            <span class="value" id="perf-physics">-- ms</span>
-        </div>
-        <div class="divider"></div>
-        <div class="row">
-            <span class="label">Entities:</span>
-            <span class="value" id="perf-entities">--</span>
-        </div>
-        <div class="hint">Press P to toggle</div>
     `
 
-    // Setup keyboard toggle
-    document.addEventListener('keydown', (e) => {
-        if (e.key === 'p' || e.key === 'P') {
-            overlay.classList.toggle('hidden')
-        }
-    })
+    // Setup close button
+    setTimeout(() => {
+        document.getElementById('perf-close')?.addEventListener('click', () => {
+            overlay.classList.add('hidden')
+        })
+    }, 0)
 
     return overlay
 }

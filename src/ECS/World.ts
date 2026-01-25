@@ -70,7 +70,12 @@ export class World {
     set timeFactor(factor: number) {
         this.ticker.timeFactor = factor
         const el = document.getElementById('timeFactor')
-        if (el) el.textContent = factor.toFixed(2)
+        if (el) {
+            // Format: show whole numbers without decimals, others with 1 decimal
+            el.textContent = factor >= 1 && Number.isInteger(factor)
+                ? String(factor)
+                : factor.toFixed(1)
+        }
     }
 
     get timeFactor(): number {
@@ -382,15 +387,13 @@ export class World {
         }
     }
 
-    // ==================== UI Bindings ====================
+    // ==================== Simulation State ====================
 
-    bindControls(): void {
-        document.getElementById('startButton')?.addEventListener('click', () => this.start())
-        document.getElementById('stopButton')?.addEventListener('click', () => this.stop())
-        document.getElementById('slowerButton')?.addEventListener('click', () => this.timeFactor *= 0.5)
-        document.getElementById('fasterButton')?.addEventListener('click', () => this.timeFactor *= 2)
+    get isRunning(): boolean {
+        return this.ticker.isRunning
     }
 }
+
 
 /**
  * Fixed-timestep ticker for physics simulation.
@@ -405,6 +408,10 @@ class Ticker {
         private callback: () => void
     ) {
         this.interval = Math.round(1000 / frequency)
+    }
+
+    get isRunning(): boolean {
+        return this.timer !== null
     }
 
     start(): void {
