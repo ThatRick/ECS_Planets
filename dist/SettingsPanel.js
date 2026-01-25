@@ -235,23 +235,28 @@ export function createSettingsPanel(onApply, onGravityChange) {
             <div class="hint">Press S to toggle • Space to play/pause</div>
         </div>
     `;
-    // Setup close button
-    setTimeout(() => {
-        document.getElementById('settings-close')?.addEventListener('click', () => {
+    // Setup event listeners using querySelector on the panel
+    const closeBtn = panel.querySelector('#settings-close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
             panel.classList.add('hidden');
         });
-        // Setup gravity algorithm change (instant, no reset needed)
-        const gravitySelect = document.getElementById('set-gravityAlgo');
-        gravitySelect?.addEventListener('change', () => {
+    }
+    // Setup gravity algorithm change (instant, no reset needed)
+    const gravitySelect = panel.querySelector('#set-gravityAlgo');
+    if (gravitySelect) {
+        gravitySelect.addEventListener('change', () => {
             onGravityChange(gravitySelect.value);
         });
-        // Setup apply button
-        const applyBtn = document.getElementById('settings-apply');
-        applyBtn?.addEventListener('click', () => {
+    }
+    // Setup apply button
+    const applyBtn = panel.querySelector('#settings-apply');
+    if (applyBtn) {
+        applyBtn.addEventListener('click', () => {
             const settings = getSettingsFromPanel();
             onApply(settings);
         });
-    }, 0);
+    }
     return panel;
 }
 export function getSettingsFromPanel() {
