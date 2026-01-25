@@ -11,7 +11,9 @@ import {
     GravitySystemOptimized,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
-    createPlanetRenderer
+    createPlanetRenderer,
+    createPlanetRendererWebGL,
+    isWebGL2Available
 } from './ECS/index.js'
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js'
 import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS } from './SettingsPanel.js'
@@ -224,7 +226,15 @@ export default class App {
 
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas))
-        world.registerSystem(createPlanetRenderer(this.canvas))
+
+        // Use WebGL renderer if available, fallback to Canvas 2D
+        if (isWebGL2Available()) {
+            world.registerSystem(createPlanetRendererWebGL(this.canvas))
+            console.log('Using WebGL 2 renderer')
+        } else {
+            world.registerSystem(createPlanetRenderer(this.canvas))
+            console.log('WebGL 2 not available, using Canvas 2D renderer')
+        }
 
         // Bind UI controls
         world.bindControls()

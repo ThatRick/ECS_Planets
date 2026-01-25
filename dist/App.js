@@ -1,5 +1,5 @@
 import Vec2 from './lib/Vector2.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, DEFAULT_SETTINGS } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
@@ -174,7 +174,15 @@ export default class App {
         world.registerSystem(GravitySystemOptimized);
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas));
-        world.registerSystem(createPlanetRenderer(this.canvas));
+        // Use WebGL renderer if available, fallback to Canvas 2D
+        if (isWebGL2Available()) {
+            world.registerSystem(createPlanetRendererWebGL(this.canvas));
+            console.log('Using WebGL 2 renderer');
+        }
+        else {
+            world.registerSystem(createPlanetRenderer(this.canvas));
+            console.log('WebGL 2 not available, using Canvas 2D renderer');
+        }
         // Bind UI controls
         world.bindControls();
         // Update body count when entities are removed
