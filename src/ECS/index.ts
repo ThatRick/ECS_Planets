@@ -25,5 +25,7 @@ export {
     GravitySystemOptimized,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
-    createPlanetRenderer
+    createPlanetRenderer,
+    createPlanetRendererWebGL,
+    isWebGL2Available
 } from './systems/index.js'
