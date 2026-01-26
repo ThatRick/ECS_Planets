@@ -1,8 +1,9 @@
 import { Position, Size, Temperature, CameraComponent } from '../Components.js';
 import { color, scale } from '../../lib/common.js';
 /**
- * Factory to create a planet renderer bound to a canvas.
- * Renders planets as circles with temperature-based coloring.
+ * Factory to create a 2D fallback planet renderer bound to a canvas.
+ * Projects 3D positions to 2D using simple orthographic projection.
+ * Note: WebGL renderer is preferred for proper 3D visualization.
  */
 export function createPlanetRenderer(canvas) {
     const ctx = canvas.getContext('2d');
@@ -22,16 +23,37 @@ export function createPlanetRenderer(canvas) {
             ctx.save();
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, width, height);
-            // Apply camera transform
-            ctx.translate(camera.offset.x, camera.offset.y);
-            ctx.scale(camera.zoom, camera.zoom);
+            // Calculate camera basis vectors
+            const cosPhi = Math.cos(camera.phi);
+            const sinPhi = Math.sin(camera.phi);
+            const cosTheta = Math.cos(camera.theta);
+            const sinTheta = Math.sin(camera.theta);
+            // Camera right vector (for X projection)
+            const rightX = cosTheta;
+            const rightZ = -sinTheta;
+            // Camera up vector (for Y projection)
+            const upX = -sinPhi * sinTheta;
+            const upY = cosPhi;
+            const upZ = -sinPhi * cosTheta;
+            // Scale factor based on camera distance and zoom
+            const scaleFactor = (Math.min(width, height) / 2) * camera.zoom / camera.distance;
+            // Center of screen
+            const centerX = width / 2;
+            const centerY = height / 2;
             // Render each planet
             for (const id of planets) {
                 const pos = world.getComponent(id, Position);
                 const size = world.getComponent(id, Size);
                 const temp = world.getComponent(id, Temperature);
+                // Project 3D position to 2D screen coordinates
+                const screenX = centerX + (pos.x * rightX + pos.z * rightZ) * scaleFactor;
+                const screenY = centerY - (pos.x * upX + pos.y * upY + pos.z * upZ) * scaleFactor;
+                const screenSize = size * scaleFactor;
+                // Skip if too small
+                if (screenSize < 0.5)
+                    continue;
                 ctx.beginPath();
-                ctx.arc(pos.x, pos.y, size, 0, Math.PI * 2);
+                ctx.arc(screenX, screenY, Math.max(screenSize, 1), 0, Math.PI * 2);
                 ctx.fillStyle = bodyColor(temp);
                 ctx.fill();
             }

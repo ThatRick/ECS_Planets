@@ -1,33 +1,43 @@
 import { CameraComponent } from '../Components.js';
-import Vec2 from '../../lib/Vector2.js';
 /**
- * Factory to create a camera movement system bound to a canvas.
- * Handles mouse/touch drag for panning and wheel/pinch for zooming.
+ * Factory to create a 3D camera movement system bound to a canvas.
+ * Handles mouse/touch drag for rotation around origin and wheel/pinch for zooming.
  */
 export function createCameraMovementSystem(canvas) {
     // Input state
     let pointerDown = false;
-    let pointerOffset = new Vec2(0, 0);
-    let deltaOffset = new Vec2(0, 0);
+    let lastPointerX = 0;
+    let lastPointerY = 0;
+    let deltaTheta = 0;
+    let deltaPhi = 0;
     let deltaZoom = 1.0;
+    let deltaDistance = 1.0;
     // Touch pinch state
     let lastPinchDistance = 0;
     // Configuration
-    const zoomStep = 0.25;
-    const minZoom = 0.0001;
-    const maxZoom = 10;
+    const rotationSensitivity = 0.005; // Radians per pixel
+    const zoomStep = 0.15;
+    const distanceStep = 0.1;
+    const minPhi = -Math.PI / 2 + 0.1; // Prevent gimbal lock at poles
+    const maxPhi = Math.PI / 2 - 0.1;
+    const minZoom = 0.1;
+    const maxZoom = 5.0;
+    const minDistance = 100;
+    const maxDistance = 1e9;
     // Helper to get position from mouse or touch event
     function getEventPos(ev) {
         const rect = canvas.getBoundingClientRect();
         if ('offsetX' in ev) {
-            return new Vec2(ev.offsetX, ev.offsetY);
+            return { x: ev.offsetX, y: ev.offsetY };
         }
-        return new Vec2(ev.clientX - rect.left, ev.clientY - rect.top);
+        return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
     }
     // Mouse events
     canvas.addEventListener('mousedown', (ev) => {
         pointerDown = true;
-        pointerOffset = getEventPos(ev);
+        const pos = getEventPos(ev);
+        lastPointerX = pos.x;
+        lastPointerY = pos.y;
     });
     canvas.addEventListener('mouseup', () => {
         pointerDown = false;
@@ -37,25 +47,42 @@ export function createCameraMovementSystem(canvas) {
     });
     canvas.addEventListener('mousemove', (ev) => {
         if (pointerDown) {
-            const currentOffset = getEventPos(ev);
-            deltaOffset.add(Vec2.sub(currentOffset, pointerOffset));
-            pointerOffset = currentOffset;
+            const pos = getEventPos(ev);
+            const dx = pos.x - lastPointerX;
+            const dy = pos.y - lastPointerY;
+            // Horizontal drag rotates theta (azimuth)
+            deltaTheta -= dx * rotationSensitivity;
+            // Vertical drag rotates phi (elevation)
+            deltaPhi -= dy * rotationSensitivity;
+            lastPointerX = pos.x;
+            lastPointerY = pos.y;
         }
     });
     canvas.addEventListener('wheel', (ev) => {
         ev.preventDefault();
-        const zoomFactor = ev.deltaY > 0 ? (1 + zoomStep) : (1 - zoomStep);
-        deltaZoom *= zoomFactor;
+        if (ev.shiftKey) {
+            // Shift + scroll: change distance (move camera closer/farther)
+            const distanceFactor = ev.deltaY > 0 ? (1 + distanceStep) : (1 - distanceStep);
+            deltaDistance *= distanceFactor;
+        }
+        else {
+            // Normal scroll: zoom (change FOV)
+            const zoomFactor = ev.deltaY > 0 ? (1 - zoomStep) : (1 + zoomStep);
+            deltaZoom *= zoomFactor;
+        }
     }, { passive: false });
     // Touch events
     canvas.addEventListener('touchstart', (ev) => {
         ev.preventDefault();
         if (ev.touches.length === 1) {
             pointerDown = true;
-            pointerOffset = getEventPos(ev.touches[0]);
+            const pos = getEventPos(ev.touches[0]);
+            lastPointerX = pos.x;
+            lastPointerY = pos.y;
         }
         else if (ev.touches.length === 2) {
             // Start pinch
+            pointerDown = false;
             const dx = ev.touches[0].clientX - ev.touches[1].clientX;
             const dy = ev.touches[0].clientY - ev.touches[1].clientY;
             lastPinchDistance = Math.sqrt(dx * dx + dy * dy);
@@ -66,9 +93,11 @@ export function createCameraMovementSystem(canvas) {
             pointerDown = false;
         }
         else if (ev.touches.length === 1) {
-            // Switched from pinch to pan
+            // Switched from pinch to rotate
             pointerDown = true;
-            pointerOffset = getEventPos(ev.touches[0]);
+            const pos = getEventPos(ev.touches[0]);
+            lastPointerX = pos.x;
+            lastPointerY = pos.y;
             lastPinchDistance = 0;
         }
     });
@@ -79,19 +108,23 @@ export function createCameraMovementSystem(canvas) {
     canvas.addEventListener('touchmove', (ev) => {
         ev.preventDefault();
         if (ev.touches.length === 1 && pointerDown) {
-            // Pan
-            const currentOffset = getEventPos(ev.touches[0]);
-            deltaOffset.add(Vec2.sub(currentOffset, pointerOffset));
-            pointerOffset = currentOffset;
+            // Rotate
+            const pos = getEventPos(ev.touches[0]);
+            const dx = pos.x - lastPointerX;
+            const dy = pos.y - lastPointerY;
+            deltaTheta -= dx * rotationSensitivity;
+            deltaPhi -= dy * rotationSensitivity;
+            lastPointerX = pos.x;
+            lastPointerY = pos.y;
         }
         else if (ev.touches.length === 2) {
-            // Pinch zoom
+            // Pinch zoom (affects distance)
             const dx = ev.touches[0].clientX - ev.touches[1].clientX;
             const dy = ev.touches[0].clientY - ev.touches[1].clientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
             if (lastPinchDistance > 0) {
                 const zoomFactor = distance / lastPinchDistance;
-                deltaZoom *= zoomFactor;
+                deltaDistance /= zoomFactor; // Pinch in = move closer
             }
             lastPinchDistance = distance;
         }
@@ -104,12 +137,24 @@ export function createCameraMovementSystem(canvas) {
             if (cameraEntity === undefined)
                 return;
             const camera = world.getComponent(cameraEntity, CameraComponent);
-            // Apply accumulated pan offset
-            camera.offset.add(deltaOffset);
-            deltaOffset.set(0, 0);
+            // Apply accumulated rotation
+            camera.theta += deltaTheta;
+            camera.phi += deltaPhi;
+            // Clamp phi to prevent flipping over poles
+            camera.phi = Math.max(minPhi, Math.min(maxPhi, camera.phi));
+            // Wrap theta to [0, 2π)
+            while (camera.theta < 0)
+                camera.theta += Math.PI * 2;
+            while (camera.theta >= Math.PI * 2)
+                camera.theta -= Math.PI * 2;
+            deltaTheta = 0;
+            deltaPhi = 0;
             // Apply accumulated zoom with bounds
             camera.zoom = Math.max(minZoom, Math.min(maxZoom, camera.zoom * deltaZoom));
             deltaZoom = 1.0;
+            // Apply accumulated distance change with bounds
+            camera.distance = Math.max(minDistance, Math.min(maxDistance, camera.distance * deltaDistance));
+            deltaDistance = 1.0;
         }
     };
 }
