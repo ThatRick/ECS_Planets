@@ -14,10 +14,15 @@
     "type": "git",
     "url": "https://github.com/ThatRick/ECS_Planets"
   },
-  "keywords": ["ecs", "physics", "simulation", "n-body"],
+  "keywords": [
+    "ecs",
+    "physics",
+    "simulation",
+    "n-body"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "vitest": "^4.0.16"
+    "vitest": "^4.0.18"
   }
 }
