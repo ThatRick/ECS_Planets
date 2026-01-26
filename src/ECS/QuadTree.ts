@@ -1,5 +1,6 @@
 /**
  * Octree implementation for 3D Barnes-Hut gravity algorithm.
+ * Also supports 2D mode (z=0) for backward compatibility.
  *
  * The Barnes-Hut algorithm reduces N-body gravity from O(n²) to O(n log n)
  * by approximating the gravitational effect of distant body groups as a
@@ -14,7 +15,7 @@
 export interface Body {
     x: number
     y: number
-    z: number
+    z?: number  // Optional for backward compatibility (defaults to 0)
     mass: number
     index: number  // Original entity index for applying forces
 }
@@ -68,19 +69,20 @@ export class Octree {
         let minZ = Infinity, maxZ = -Infinity
 
         for (const body of bodies) {
+            const z = body.z ?? 0
             if (body.x < minX) minX = body.x
             if (body.x > maxX) maxX = body.x
             if (body.y < minY) minY = body.y
             if (body.y > maxY) maxY = body.y
-            if (body.z < minZ) minZ = body.z
-            if (body.z > maxZ) maxZ = body.z
+            if (z < minZ) minZ = z
+            if (z > maxZ) maxZ = z
         }
 
         // Make it a cube with some padding
         const width = maxX - minX
         const height = maxY - minY
         const depth = maxZ - minZ
-        const size = Math.max(width, height, depth) * 1.1 + 1  // Add small padding
+        const size = Math.max(width, height, depth, 1) * 1.1 + 1  // Add small padding, ensure non-zero
         const halfSize = size / 2
         const cx = (minX + maxX) / 2
         const cy = (minY + maxY) / 2
@@ -165,9 +167,10 @@ export class Octree {
     }
 
     private getOctant(node: OctreeNode, body: Body): number {
+        const z = body.z ?? 0
         const xPos = body.x >= node.cx ? 1 : 0
         const yPos = body.y >= node.cy ? 1 : 0
-        const zPos = body.z >= node.cz ? 1 : 0
+        const zPos = z >= node.cz ? 1 : 0
         return (zPos << 2) | (yPos << 1) | xPos
     }
 
@@ -181,7 +184,7 @@ export class Octree {
             node.totalMass = node.body.mass
             node.comX = node.body.x
             node.comY = node.body.y
-            node.comZ = node.body.z
+            node.comZ = node.body.z ?? 0
             return
         }
 
@@ -214,8 +217,9 @@ export class Octree {
     /**
      * Calculate force on a body using Barnes-Hut approximation.
      * Returns {fx, fy, fz} force components (not yet divided by mass).
+     * For 2D compatibility, fz will be 0 if all bodies have z=0.
      */
-    calculateForce(body: Body, G: number, softening: number = 100): { fx: number, fy: number, fz: number } {
+    calculateForce(body: Body, G: number, softening: number = 100): { fx: number, fy: number, fz?: number } {
         if (!this.root) {
             return { fx: 0, fy: 0, fz: 0 }
         }
@@ -224,6 +228,7 @@ export class Octree {
         let fy = 0
         let fz = 0
         const softeningSq = softening * softening
+        const bodyZ = body.z ?? 0
 
         const stack: OctreeNode[] = [this.root]
 
@@ -235,7 +240,7 @@ export class Octree {
             // Distance from body to node's center of mass
             const dx = node.comX - body.x
             const dy = node.comY - body.y
-            const dz = node.comZ - body.z
+            const dz = node.comZ - bodyZ
             const distSq = dx * dx + dy * dy + dz * dz
             const dist = Math.sqrt(distSq)
 

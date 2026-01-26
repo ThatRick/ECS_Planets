@@ -1,6 +1,7 @@
 /**
  * 3D Spatial hash grid for efficient proximity queries.
  * Reduces N-body collision checks from O(n²) to O(n) average case.
+ * Also supports 2D mode for backward compatibility.
  */
 export class SpatialHash3D {
     cellSize;
@@ -8,16 +9,31 @@ export class SpatialHash3D {
     constructor(cellSize) {
         this.cellSize = cellSize;
     }
-    key(x, y, z) {
-        const cx = Math.floor(x / this.cellSize);
-        const cy = Math.floor(y / this.cellSize);
-        const cz = Math.floor(z / this.cellSize);
-        return `${cx},${cy},${cz}`;
-    }
     clear() {
         this.cells.clear();
     }
-    insert(id, x, y, z, radius = 0) {
+    /**
+     * Insert an entity into the spatial hash.
+     * Supports both 2D and 3D modes:
+     * - insert(id, x, y, z, radius) - 3D mode
+     * - insert(id, pos, radius) - 2D mode with {x, y} object
+     */
+    insert(id, xOrPos, yOrRadius, zOrUndefined, radiusArg) {
+        let x, y, z, radius;
+        if (typeof xOrPos === 'object') {
+            // 2D mode: insert(id, pos, radius)
+            x = xOrPos.x;
+            y = xOrPos.y;
+            z = xOrPos.z ?? 0;
+            radius = yOrRadius ?? 0;
+        }
+        else {
+            // 3D mode: insert(id, x, y, z, radius)
+            x = xOrPos;
+            y = yOrRadius ?? 0;
+            z = zOrUndefined ?? 0;
+            radius = radiusArg ?? 0;
+        }
         // Insert into all cells that the entity's bounding box overlaps
         const minX = Math.floor((x - radius) / this.cellSize);
         const maxX = Math.floor((x + radius) / this.cellSize);
@@ -40,15 +56,17 @@ export class SpatialHash3D {
     /**
      * Query all entities within a radius of a position.
      * Returns entity IDs that are potentially within range (broad phase).
+     * Supports both 2D {x, y} and 3D {x, y, z} position objects.
      */
     queryRadius(pos, radius) {
         const results = new Set();
+        const z = pos.z ?? 0;
         const minX = Math.floor((pos.x - radius) / this.cellSize);
         const maxX = Math.floor((pos.x + radius) / this.cellSize);
         const minY = Math.floor((pos.y - radius) / this.cellSize);
         const maxY = Math.floor((pos.y + radius) / this.cellSize);
-        const minZ = Math.floor((pos.z - radius) / this.cellSize);
-        const maxZ = Math.floor((pos.z + radius) / this.cellSize);
+        const minZ = Math.floor((z - radius) / this.cellSize);
+        const maxZ = Math.floor((z + radius) / this.cellSize);
         for (let cx = minX; cx <= maxX; cx++) {
             for (let cy = minY; cy <= maxY; cy++) {
                 for (let cz = minZ; cz <= maxZ; cz++) {
