@@ -1,5 +1,5 @@
 import { Position, Size, Temperature, CameraComponent } from '../Components.js';
-// Vertex shader - transforms quad vertices and passes instance data to fragment shader
+// Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
 
@@ -7,33 +7,36 @@ precision highp float;
 in vec2 a_vertex;
 
 // Per-instance attributes
-in vec2 a_position;
+in vec3 a_position;
 in float a_size;
 in float a_temperature;
 
 // Uniforms
 uniform vec2 u_resolution;
-uniform vec2 u_cameraOffset;
-uniform float u_cameraZoom;
+uniform mat4 u_viewMatrix;
+uniform mat4 u_projMatrix;
+uniform vec3 u_cameraRight;
+uniform vec3 u_cameraUp;
 
 // Varyings to fragment shader
 out vec2 v_uv;
 out float v_temperature;
+out float v_depth;
 
 void main() {
     // Pass to fragment shader
     v_uv = a_vertex;
     v_temperature = a_temperature;
 
-    // Transform: local -> world -> screen
-    vec2 worldPos = a_position + a_vertex * a_size;
-    vec2 screenPos = worldPos * u_cameraZoom + u_cameraOffset;
+    // Billboard: offset from center using camera-aligned axes
+    vec3 worldPos = a_position + u_cameraRight * a_vertex.x * a_size + u_cameraUp * a_vertex.y * a_size;
 
-    // Convert to clip space (-1 to 1), flip Y for canvas coordinates
-    vec2 clipPos = (screenPos / u_resolution) * 2.0 - 1.0;
-    clipPos.y = -clipPos.y;
+    // Transform to view space then clip space
+    vec4 viewPos = u_viewMatrix * vec4(worldPos, 1.0);
+    gl_Position = u_projMatrix * viewPos;
 
-    gl_Position = vec4(clipPos, 0.0, 1.0);
+    // Pass depth for potential depth-based effects
+    v_depth = -viewPos.z;
 }
 `;
 // Fragment shader - renders circle with temperature-based coloring
@@ -42,6 +45,7 @@ precision highp float;
 
 in vec2 v_uv;
 in float v_temperature;
+in float v_depth;
 
 out vec4 fragColor;
 
@@ -54,7 +58,6 @@ void main() {
     float alpha = 1.0 - smoothstep(0.95, 1.0, dist);
 
     // Temperature to color using logarithmic scale
-    // Matches the Canvas 2D implementation logic
     float logTemp = log(max(v_temperature, 1.0)) / log(10.0);
 
     float minBrightness = 80.0 / 255.0;
@@ -76,18 +79,19 @@ void main() {
 `;
 // Maximum entities we can render (pre-allocated buffer size)
 const MAX_INSTANCES = 100000;
-// Instance data stride: x, y, size, temperature (4 floats per instance)
-const INSTANCE_STRIDE = 4;
+// Instance data stride: x, y, z, size, temperature (5 floats per instance)
+const INSTANCE_STRIDE = 5;
 /**
- * Factory to create a WebGL-based planet renderer.
- * Uses instanced rendering for high performance with large entity counts.
+ * Factory to create a WebGL-based 3D planet renderer.
+ * Uses instanced rendering with perspective projection and billboarded sprites.
  */
 export function createPlanetRendererWebGL(canvas) {
     // Initialize WebGL 2 context
     const gl = canvas.getContext('webgl2', {
         alpha: false,
         antialias: false,
-        powerPreference: 'high-performance'
+        powerPreference: 'high-performance',
+        depth: true
     });
     if (!gl) {
         throw new Error('WebGL 2 not supported');
@@ -112,8 +116,10 @@ export function createPlanetRendererWebGL(canvas) {
     };
     const uniforms = {
         resolution: gl.getUniformLocation(program, 'u_resolution'),
-        cameraOffset: gl.getUniformLocation(program, 'u_cameraOffset'),
-        cameraZoom: gl.getUniformLocation(program, 'u_cameraZoom')
+        viewMatrix: gl.getUniformLocation(program, 'u_viewMatrix'),
+        projMatrix: gl.getUniformLocation(program, 'u_projMatrix'),
+        cameraRight: gl.getUniformLocation(program, 'u_cameraRight'),
+        cameraUp: gl.getUniformLocation(program, 'u_cameraUp')
     };
     // Create VAO
     const vao = gl.createVertexArray();
@@ -132,44 +138,119 @@ export function createPlanetRendererWebGL(canvas) {
     gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(attribs.vertex);
     gl.vertexAttribPointer(attribs.vertex, 2, gl.FLOAT, false, 0, 0);
-    // Create instance buffer (position, size, temperature per instance)
+    // Create instance buffer (position xyz, size, temperature per instance)
     const instanceBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, MAX_INSTANCES * INSTANCE_STRIDE * 4, gl.DYNAMIC_DRAW);
     // Set up instance attributes with divisor = 1 (per-instance)
-    // a_position (vec2): offset 0
+    // a_position (vec3): offset 0
     gl.enableVertexAttribArray(attribs.position);
-    gl.vertexAttribPointer(attribs.position, 2, gl.FLOAT, false, INSTANCE_STRIDE * 4, 0);
+    gl.vertexAttribPointer(attribs.position, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 0);
     gl.vertexAttribDivisor(attribs.position, 1);
-    // a_size (float): offset 8
+    // a_size (float): offset 12
     gl.enableVertexAttribArray(attribs.size);
-    gl.vertexAttribPointer(attribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 8);
+    gl.vertexAttribPointer(attribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
     gl.vertexAttribDivisor(attribs.size, 1);
-    // a_temperature (float): offset 12
+    // a_temperature (float): offset 16
     gl.enableVertexAttribArray(attribs.temperature);
-    gl.vertexAttribPointer(attribs.temperature, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
+    gl.vertexAttribPointer(attribs.temperature, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
     gl.vertexAttribDivisor(attribs.temperature, 1);
     gl.bindVertexArray(null);
     // Pre-allocate instance data buffer on CPU side
     const instanceData = new Float32Array(MAX_INSTANCES * INSTANCE_STRIDE);
+    // Pre-allocate matrix buffers
+    const viewMatrix = new Float32Array(16);
+    const projMatrix = new Float32Array(16);
     // Enable blending for anti-aliased edges
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // Enable depth testing for proper 3D ordering
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
     return {
         name: 'PlanetRendererWebGL',
         phase: 'visual',
         update(world, _dt) {
             const { width, height } = canvas;
             // Handle canvas resize
-            if (canvas.width !== width || canvas.height !== height) {
-                gl.viewport(0, 0, width, height);
-            }
             gl.viewport(0, 0, width, height);
             // Get camera
             const cameraEntity = world.querySingle(CameraComponent);
             if (cameraEntity === undefined)
                 return;
             const camera = world.getComponent(cameraEntity, CameraComponent);
+            // Calculate camera position from spherical coordinates
+            const cosPhi = Math.cos(camera.phi);
+            const sinPhi = Math.sin(camera.phi);
+            const cosTheta = Math.cos(camera.theta);
+            const sinTheta = Math.sin(camera.theta);
+            const camX = camera.distance * cosPhi * sinTheta;
+            const camY = camera.distance * sinPhi;
+            const camZ = camera.distance * cosPhi * cosTheta;
+            // Camera looks at origin
+            const targetX = 0, targetY = 0, targetZ = 0;
+            const upX = 0, upY = 1, upZ = 0;
+            // Calculate camera basis vectors (for billboarding)
+            // Forward: camera to target (normalized)
+            let fwdX = targetX - camX;
+            let fwdY = targetY - camY;
+            let fwdZ = targetZ - camZ;
+            let fwdLen = Math.sqrt(fwdX * fwdX + fwdY * fwdY + fwdZ * fwdZ);
+            fwdX /= fwdLen;
+            fwdY /= fwdLen;
+            fwdZ /= fwdLen;
+            // Right: up × forward (normalized)
+            let rightX = upY * fwdZ - upZ * fwdY;
+            let rightY = upZ * fwdX - upX * fwdZ;
+            let rightZ = upX * fwdY - upY * fwdX;
+            let rightLen = Math.sqrt(rightX * rightX + rightY * rightY + rightZ * rightZ);
+            rightX /= rightLen;
+            rightY /= rightLen;
+            rightZ /= rightLen;
+            // Actual up: forward × right
+            const actualUpX = fwdY * rightZ - fwdZ * rightY;
+            const actualUpY = fwdZ * rightX - fwdX * rightZ;
+            const actualUpZ = fwdX * rightY - fwdY * rightX;
+            // Build view matrix (lookAt)
+            viewMatrix[0] = rightX;
+            viewMatrix[1] = actualUpX;
+            viewMatrix[2] = -fwdX;
+            viewMatrix[3] = 0;
+            viewMatrix[4] = rightY;
+            viewMatrix[5] = actualUpY;
+            viewMatrix[6] = -fwdY;
+            viewMatrix[7] = 0;
+            viewMatrix[8] = rightZ;
+            viewMatrix[9] = actualUpZ;
+            viewMatrix[10] = -fwdZ;
+            viewMatrix[11] = 0;
+            viewMatrix[12] = -(rightX * camX + rightY * camY + rightZ * camZ);
+            viewMatrix[13] = -(actualUpX * camX + actualUpY * camY + actualUpZ * camZ);
+            viewMatrix[14] = -(-fwdX * camX + -fwdY * camY + -fwdZ * camZ);
+            viewMatrix[15] = 1;
+            // Build perspective projection matrix
+            const fov = Math.PI / 4 / camera.zoom; // Adjust FOV based on zoom
+            const aspect = width / height;
+            const near = camera.distance * 0.01;
+            const far = camera.distance * 10;
+            const f = 1.0 / Math.tan(fov / 2);
+            const rangeInv = 1.0 / (near - far);
+            projMatrix[0] = f / aspect;
+            projMatrix[1] = 0;
+            projMatrix[2] = 0;
+            projMatrix[3] = 0;
+            projMatrix[4] = 0;
+            projMatrix[5] = f;
+            projMatrix[6] = 0;
+            projMatrix[7] = 0;
+            projMatrix[8] = 0;
+            projMatrix[9] = 0;
+            projMatrix[10] = (far + near) * rangeInv;
+            projMatrix[11] = -1;
+            projMatrix[12] = 0;
+            projMatrix[13] = 0;
+            projMatrix[14] = 2 * far * near * rangeInv;
+            projMatrix[15] = 0;
             // Get renderable planets
             const planets = world.query(Position, Size, Temperature);
             const planetCount = Math.min(planets.length, MAX_INSTANCES);
@@ -182,22 +263,25 @@ export function createPlanetRendererWebGL(canvas) {
                 const temp = world.getComponent(id, Temperature);
                 instanceData[offset++] = pos.x;
                 instanceData[offset++] = pos.y;
+                instanceData[offset++] = pos.z;
                 instanceData[offset++] = size;
                 instanceData[offset++] = temp;
             }
             // Upload instance data to GPU
             gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
             gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, offset));
-            // Clear screen
+            // Clear screen and depth buffer
             gl.clearColor(0, 0, 0, 1);
-            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
             // Set up shader program
             gl.useProgram(program);
             gl.bindVertexArray(vao);
             // Set uniforms
             gl.uniform2f(uniforms.resolution, width, height);
-            gl.uniform2f(uniforms.cameraOffset, camera.offset.x, camera.offset.y);
-            gl.uniform1f(uniforms.cameraZoom, camera.zoom);
+            gl.uniformMatrix4fv(uniforms.viewMatrix, false, viewMatrix);
+            gl.uniformMatrix4fv(uniforms.projMatrix, false, projMatrix);
+            gl.uniform3f(uniforms.cameraRight, rightX, rightY, rightZ);
+            gl.uniform3f(uniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
             // Draw all instances with a single draw call
             gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, planetCount);
             gl.bindVertexArray(null);

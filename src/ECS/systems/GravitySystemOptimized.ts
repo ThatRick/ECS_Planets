@@ -1,22 +1,25 @@
 import { System } from '../System.js'
 import { World } from '../World.js'
 import { Position, Velocity, Mass, Size, Temperature } from '../Components.js'
-import { SpatialHash } from '../SpatialHash.js'
+import { SpatialHash3D } from '../SpatialHash.js'
 import { PhysicsConfig } from '../PhysicsConfig.js'
 
 /**
- * Pre-allocated scratch space for physics calculations (module-level singleton)
+ * Pre-allocated scratch space for 3D physics calculations (module-level singleton)
  */
 let scratch: {
     posX: Float64Array
     posY: Float64Array
+    posZ: Float64Array
     velX: Float64Array
     velY: Float64Array
+    velZ: Float64Array
     mass: Float64Array
     size: Float64Array
     temp: Float64Array
     accX: Float64Array
     accY: Float64Array
+    accZ: Float64Array
     entityIds: number[]
     capacity: number
 } | null = null
@@ -27,13 +30,16 @@ function ensureScratch(count: number) {
         scratch = {
             posX: new Float64Array(capacity),
             posY: new Float64Array(capacity),
+            posZ: new Float64Array(capacity),
             velX: new Float64Array(capacity),
             velY: new Float64Array(capacity),
+            velZ: new Float64Array(capacity),
             mass: new Float64Array(capacity),
             size: new Float64Array(capacity),
             temp: new Float64Array(capacity),
             accX: new Float64Array(capacity),
             accY: new Float64Array(capacity),
+            accZ: new Float64Array(capacity),
             entityIds: new Array(capacity),
             capacity
         }
@@ -41,17 +47,18 @@ function ensureScratch(count: number) {
     // Clear acceleration arrays
     scratch.accX.fill(0, 0, count)
     scratch.accY.fill(0, 0, count)
+    scratch.accZ.fill(0, 0, count)
     return scratch
 }
 
 /**
- * Optimized N-body gravitational simulation using TypedArrays
+ * Optimized 3D N-body gravitational simulation using TypedArrays
  *
  * Optimizations:
  * - Direct Float64Array access (no Map lookups)
  * - Pre-allocated scratch arrays (no GC pressure)
  * - Newton's 3rd law symmetry (compute each pair once)
- * - Inline vector math (no temporary Vec2 objects)
+ * - Inline vector math (no temporary Vec3 objects)
  */
 export const GravitySystemOptimized: System = {
     name: 'GravityOptimized',
@@ -66,7 +73,7 @@ export const GravitySystemOptimized: System = {
 
         // Ensure scratch space
         const s = ensureScratch(n)
-        const { posX, posY, velX, velY, mass, size, temp, accX, accY, entityIds } = s
+        const { posX, posY, posZ, velX, velY, velZ, mass, size, temp, accX, accY, accZ, entityIds } = s
 
         // Copy data to contiguous arrays (cache-friendly access pattern)
         for (let i = 0; i < n; i++) {
@@ -76,22 +83,24 @@ export const GravitySystemOptimized: System = {
             const vel = world.getComponent(id, Velocity)!
             posX[i] = pos.x
             posY[i] = pos.y
+            posZ[i] = pos.z
             velX[i] = vel.x
             velY[i] = vel.y
+            velZ[i] = vel.z
             mass[i] = world.getComponent(id, Mass)!
             size[i] = world.getComponent(id, Size)!
             temp[i] = world.getComponent(id, Temperature)!
         }
 
-        // ========== Collision Detection with Spatial Hash ==========
+        // ========== Collision Detection with 3D Spatial Hash ==========
         let maxSize = 0
         for (let i = 0; i < n; i++) {
             if (size[i] > maxSize) maxSize = size[i]
         }
 
-        const spatialHash = new SpatialHash(maxSize * 4)
+        const spatialHash = new SpatialHash3D(maxSize * 4)
         for (let i = 0; i < n; i++) {
-            spatialHash.insert(i, { x: posX[i], y: posY[i] } as any, size[i])
+            spatialHash.insert(i, posX[i], posY[i], posZ[i], size[i])
         }
 
         const mergedIndices = new Set<number>()
@@ -102,7 +111,8 @@ export const GravitySystemOptimized: System = {
 
             const dx = posX[iB] - posX[iA]
             const dy = posY[iB] - posY[iA]
-            const dist = Math.sqrt(dx * dx + dy * dy)
+            const dz = posZ[iB] - posZ[iA]
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
             if (dist < size[iA] + size[iB]) {
                 // Collision! Merge smaller into larger
@@ -114,15 +124,17 @@ export const GravitySystemOptimized: System = {
                 // Conservation of momentum
                 const newVx = (velX[winner] * mW + velX[loser] * mL) / combinedMass
                 const newVy = (velY[winner] * mW + velY[loser] * mL) / combinedMass
+                const newVz = (velZ[winner] * mW + velZ[loser] * mL) / combinedMass
 
                 // Center of mass
                 const newPx = (posX[winner] * mW + posX[loser] * mL) / combinedMass
                 const newPy = (posY[winner] * mW + posY[loser] * mL) / combinedMass
+                const newPz = (posZ[winner] * mW + posZ[loser] * mL) / combinedMass
 
                 // Impact heating (capped)
-                const initKE = 0.5 * mW * (velX[winner] ** 2 + velY[winner] ** 2)
-                            + 0.5 * mL * (velX[loser] ** 2 + velY[loser] ** 2)
-                const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2)
+                const initKE = 0.5 * mW * (velX[winner] ** 2 + velY[winner] ** 2 + velZ[winner] ** 2)
+                            + 0.5 * mL * (velX[loser] ** 2 + velY[loser] ** 2 + velZ[loser] ** 2)
+                const finalKE = 0.5 * combinedMass * (newVx ** 2 + newVy ** 2 + newVz ** 2)
                 const energyLoss = initKE - finalKE
                 const combinedTemp = (temp[winner] * mW + temp[loser] * mL) / combinedMass
                 const impactHeat = (energyLoss * impactHeatMultiplier) / (combinedMass * heatCapacity)
@@ -130,8 +142,10 @@ export const GravitySystemOptimized: System = {
                 // Update winner
                 posX[winner] = newPx
                 posY[winner] = newPy
+                posZ[winner] = newPz
                 velX[winner] = newVx
                 velY[winner] = newVy
+                velZ[winner] = newVz
                 mass[winner] = combinedMass
                 size[winner] = PhysicsConfig.bodySize(combinedMass)
                 temp[winner] = Math.min(combinedTemp + impactHeat, maxImpactTemperature)
@@ -152,6 +166,7 @@ export const GravitySystemOptimized: System = {
 
             const pxi = posX[i]
             const pyi = posY[i]
+            const pzi = posZ[i]
             const mi = mass[i]
 
             for (let j = i + 1; j < n; j++) {
@@ -159,19 +174,23 @@ export const GravitySystemOptimized: System = {
 
                 const dx = posX[j] - pxi
                 const dy = posY[j] - pyi
-                const distSq = dx * dx + dy * dy
+                const dz = posZ[j] - pzi
+                const distSq = dx * dx + dy * dy + dz * dz
                 const dist = Math.sqrt(distSq)
 
                 if (dist > 0) {
                     const force = G / distSq
                     const fx = (dx / dist) * force
                     const fy = (dy / dist) * force
+                    const fz = (dz / dist) * force
 
                     // Newton's 3rd law: equal and opposite forces
                     accX[i] += fx * mass[j]
                     accY[i] += fy * mass[j]
+                    accZ[i] += fz * mass[j]
                     accX[j] -= fx * mi
                     accY[j] -= fy * mi
+                    accZ[j] -= fz * mi
                 }
             }
         }
@@ -185,19 +204,23 @@ export const GravitySystemOptimized: System = {
 
             velX[i] += accX[i] * halfDt
             velY[i] += accY[i] * halfDt
+            velZ[i] += accZ[i] * halfDt
             posX[i] += velX[i] * dt
             posY[i] += velY[i] * dt
+            posZ[i] += velZ[i] * dt
         }
 
         // Recalculate accelerations at new positions
         accX.fill(0, 0, n)
         accY.fill(0, 0, n)
+        accZ.fill(0, 0, n)
 
         for (let i = 0; i < n; i++) {
             if (mergedIndices.has(i)) continue
 
             const pxi = posX[i]
             const pyi = posY[i]
+            const pzi = posZ[i]
             const mi = mass[i]
 
             for (let j = i + 1; j < n; j++) {
@@ -205,18 +228,22 @@ export const GravitySystemOptimized: System = {
 
                 const dx = posX[j] - pxi
                 const dy = posY[j] - pyi
-                const distSq = dx * dx + dy * dy
+                const dz = posZ[j] - pzi
+                const distSq = dx * dx + dy * dy + dz * dz
                 const dist = Math.sqrt(distSq)
 
                 if (dist > 0) {
                     const force = G / distSq
                     const fx = (dx / dist) * force
                     const fy = (dy / dist) * force
+                    const fz = (dz / dist) * force
 
                     accX[i] += fx * mass[j]
                     accY[i] += fy * mass[j]
+                    accZ[i] += fz * mass[j]
                     accX[j] -= fx * mi
                     accY[j] -= fy * mi
+                    accZ[j] -= fz * mi
                 }
             }
         }
@@ -227,6 +254,7 @@ export const GravitySystemOptimized: System = {
 
             velX[i] += accX[i] * halfDt
             velY[i] += accY[i] * halfDt
+            velZ[i] += accZ[i] * halfDt
 
             // Black-body radiation cooling
             const surfaceArea = 4 * Math.PI * size[i] ** 2
@@ -245,8 +273,10 @@ export const GravitySystemOptimized: System = {
 
             pos.x = posX[i]
             pos.y = posY[i]
+            pos.z = posZ[i]
             vel.x = velX[i]
             vel.y = velY[i]
+            vel.z = velZ[i]
             world.setComponent(id, Mass, mass[i])
             world.setComponent(id, Size, size[i])
             world.setComponent(id, Temperature, temp[i])

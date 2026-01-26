@@ -347,9 +347,9 @@ export function createSettingsPanel(
     const velocityScaleField = panel.querySelector('#velocity-scale-field') as HTMLElement
 
     const modeDescriptions: Record<VelocityMode, string> = {
-        'collapse': 'Random slow velocities - bodies collapse under gravity',
-        'orbital': 'Circular orbits around center - velocity depends on distance',
-        'static': 'No initial velocity - pure gravitational collapse'
+        'collapse': '3D spherical cloud with random velocities - collapses under gravity',
+        'orbital': 'Thin disc in XZ plane with circular orbital velocities',
+        'static': '3D point cloud with small random velocities'
     }
 
     if (velocityModeSelect && modeDesc) {

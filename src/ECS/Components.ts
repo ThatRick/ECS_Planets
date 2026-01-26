@@ -1,4 +1,4 @@
-import Vec2 from '../lib/Vector2.js'
+import Vec3 from '../lib/Vector3.js'
 
 // Component type symbols for type-safe component access
 export const Position = Symbol('Position')
@@ -8,16 +8,18 @@ export const Size = Symbol('Size')
 export const Temperature = Symbol('Temperature')
 export const CameraComponent = Symbol('Camera')
 
-// Component data types
+// Component data types for 3D camera with spherical coordinates
 export interface CameraData {
-    offset: Vec2
-    zoom: number
+    distance: number    // Distance from origin
+    theta: number       // Horizontal rotation (azimuth) in radians
+    phi: number         // Vertical rotation (elevation) in radians
+    zoom: number        // Field of view scale
 }
 
 // Type mapping from symbols to their data types
 export interface ComponentTypes {
-    [Position]: Vec2
-    [Velocity]: Vec2
+    [Position]: Vec3    // 3D position
+    [Velocity]: Vec3    // 3D velocity
     [Mass]: number
     [Size]: number
     [Temperature]: number

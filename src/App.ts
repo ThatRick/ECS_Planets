@@ -1,4 +1,4 @@
-import Vec2 from './lib/Vector2.js'
+import Vec3 from './lib/Vector3.js'
 import {
     World,
     Position,
@@ -11,7 +11,6 @@ import {
     GravitySystemOptimized,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
-    createPlanetRenderer,
     createPlanetRendererWebGL,
     isWebGL2Available
 } from './ECS/index.js'
@@ -108,25 +107,31 @@ export default class App {
     }
 
     /**
-     * Calculate initial velocity based on mode
+     * Calculate initial velocity based on mode (3D)
+     * - Static: Small random velocities in all directions
+     * - Orbital: Tangential velocity in XZ plane (thin disc)
+     * - Collapse: Random velocities scaled by distance
      */
     private calculateVelocity(
-        pos: Vec2,
+        pos: Vec3,
         r: number,
         mode: VelocityMode,
         scale: number,
         totalMass: number
-    ): Vec2 {
+    ): Vec3 {
         switch (mode) {
             case 'orbital': {
-                // Keplerian orbital velocity: v = sqrt(G * M / r)
+                // Keplerian orbital velocity in XZ plane: v = sqrt(G * M / r)
                 // Scale adjusts how circular the orbit is (1.0 = circular)
                 const G = PhysicsConfig.G
-                const orbitalSpeed = Math.sqrt(G * totalMass / r) * scale
-                // Perpendicular to radius
-                const angle = Math.atan2(pos.y, pos.x)
-                return new Vec2(
+                // Use distance in XZ plane for orbital calculation
+                const rXZ = Math.sqrt(pos.x * pos.x + pos.z * pos.z)
+                const orbitalSpeed = Math.sqrt(G * totalMass / Math.max(rXZ, 1)) * scale
+                // Perpendicular to radius in XZ plane (tangential)
+                const angle = Math.atan2(pos.z, pos.x)
+                return new Vec3(
                     -Math.sin(angle) * orbitalSpeed,
+                    0,  // No Y velocity for disc
                     Math.cos(angle) * orbitalSpeed
                 )
             }
@@ -134,14 +139,64 @@ export default class App {
                 // Random velocity scaled by distance (more uniform cloud)
                 // Small random velocities for interesting collapse dynamics
                 const maxSpeed = Math.sqrt(r) * scale * 0.5
-                return new Vec2(
+                return new Vec3(
+                    (Math.random() - 0.5) * maxSpeed,
                     (Math.random() - 0.5) * maxSpeed,
                     (Math.random() - 0.5) * maxSpeed
                 )
             }
             case 'static':
-            default:
-                return new Vec2(0, 0)
+            default: {
+                // Small random velocities for 3D point cloud
+                const smallSpeed = scale * 10  // Small random velocities
+                return new Vec3(
+                    (Math.random() - 0.5) * smallSpeed,
+                    (Math.random() - 0.5) * smallSpeed,
+                    (Math.random() - 0.5) * smallSpeed
+                )
+            }
+        }
+    }
+
+    /**
+     * Generate 3D position based on velocity mode
+     * - Static: Spherical distribution (3D point cloud)
+     * - Orbital: Thin disc in XZ plane
+     * - Collapse: Spherical shell (annulus in 3D)
+     */
+    private generatePosition(
+        radiusMin: number,
+        radiusMax: number,
+        mode: VelocityMode
+    ): Vec3 {
+        const r = radiusMin + Math.random() * (radiusMax - radiusMin)
+
+        if (mode === 'orbital') {
+            // Thin disc: small Y variation, full XZ distribution
+            const angle = Math.random() * Math.PI * 2
+            const discThickness = (radiusMax - radiusMin) * 0.05  // 5% of radius range
+            return new Vec3(
+                Math.cos(angle) * r,
+                (Math.random() - 0.5) * discThickness,
+                Math.sin(angle) * r
+            )
+        } else {
+            // Spherical distribution for static and collapse modes
+            // Use rejection sampling for uniform sphere distribution
+            let x, y, z, lenSq
+            do {
+                x = Math.random() * 2 - 1
+                y = Math.random() * 2 - 1
+                z = Math.random() * 2 - 1
+                lenSq = x * x + y * y + z * z
+            } while (lenSq > 1 || lenSq === 0)
+
+            const len = Math.sqrt(lenSq)
+            return new Vec3(
+                (x / len) * r,
+                (y / len) * r,
+                (z / len) * r
+            )
         }
     }
 
@@ -160,10 +215,13 @@ export default class App {
         for (let i = 0; i < settings.bodyCount; i++) {
             const entity = this.world.createEntity()
 
-            // Random position in annulus (ring between radiusMin and radiusMax)
-            const r = settings.radiusMin + Math.random() * (settings.radiusMax - settings.radiusMin)
-            const angle = Math.random() * Math.PI * 2
-            const pos = new Vec2(Math.cos(angle) * r, Math.sin(angle) * r)
+            // Generate 3D position based on mode
+            const pos = this.generatePosition(
+                settings.radiusMin,
+                settings.radiusMax,
+                settings.velocityMode
+            )
+            const r = pos.len()
 
             // Calculate velocity based on mode
             const vel = this.calculateVelocity(
@@ -184,11 +242,11 @@ export default class App {
             this.world.addComponent(entity, Temperature, settings.initialTemp)
         }
 
-        // Update camera zoom based on new radius
+        // Update camera distance based on new radius
         const cameraEntity = this.world.querySingle(CameraComponent)
         if (cameraEntity !== undefined) {
             const camera = this.world.getComponent(cameraEntity, CameraComponent)!
-            camera.zoom = this.canvas.height / settings.radiusMax * 0.4
+            camera.distance = settings.radiusMax * 3
         }
 
         this.updateBodyCount()
@@ -223,7 +281,6 @@ export default class App {
     }
 
     setup(): void {
-        const { width, height } = this.canvas
         const world = this.world
 
         // Initial configuration (matching DEFAULT_SETTINGS in SettingsPanel)
@@ -241,11 +298,13 @@ export default class App {
         // Time factor for simulation speed
         world.timeFactor = 100
 
-        // Create camera entity
+        // Create camera entity with 3D spherical coordinates
         const cameraEntity = world.createEntity()
         world.addComponent(cameraEntity, CameraComponent, {
-            zoom: height / config.radiusMax * 0.4,
-            offset: new Vec2(width / 2, height / 2)
+            distance: config.radiusMax * 3,  // Camera distance from origin
+            theta: Math.PI / 4,              // Horizontal rotation (45°)
+            phi: Math.PI / 6,                // Vertical rotation (30° elevation)
+            zoom: 1.0                        // FOV zoom factor
         })
 
         // Estimate total mass for orbital calculations
@@ -256,10 +315,13 @@ export default class App {
         for (let i = 0; i < config.bodyCount; i++) {
             const entity = world.createEntity()
 
-            // Random position in annulus
-            const r = config.radiusMin + Math.random() * (config.radiusMax - config.radiusMin)
-            const angle = Math.random() * Math.PI * 2
-            const pos = new Vec2(Math.cos(angle) * r, Math.sin(angle) * r)
+            // Generate 3D position based on mode
+            const pos = this.generatePosition(
+                config.radiusMin,
+                config.radiusMax,
+                config.velocityMode
+            )
+            const r = pos.len()
 
             // Calculate velocity based on mode
             const vel = this.calculateVelocity(
@@ -287,15 +349,14 @@ export default class App {
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas))
 
-        // Use WebGL renderer if available, fallback to Canvas 2D
+        // Use WebGL renderer (required for 3D)
         if (isWebGL2Available()) {
             world.registerSystem(createPlanetRendererWebGL(this.canvas))
             this.currentRenderer = 'webgl'
-            console.log('Using WebGL 2 renderer')
+            console.log('Using WebGL 2 renderer (3D)')
         } else {
-            world.registerSystem(createPlanetRenderer(this.canvas))
+            console.error('WebGL 2 not available - 3D rendering requires WebGL 2')
             this.currentRenderer = 'canvas'
-            console.log('WebGL 2 not available, using Canvas 2D renderer')
         }
         this.updateRendererBadge()
 
@@ -306,7 +367,7 @@ export default class App {
         // Update settings panel with initial values
         updateSettingsPanelValues(config)
 
-        console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode)`)
+        console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`)
     }
 
     private bindControls(): void {
