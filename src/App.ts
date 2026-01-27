@@ -367,6 +367,9 @@ export default class App {
         // Update settings panel with initial values
         updateSettingsPanelValues(config)
 
+        // Hook up simulation tick tracking for performance monitoring
+        world.onSimTick = () => this.perfMonitor.simTick()
+
         console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`)
     }
 
@@ -438,12 +441,11 @@ export default class App {
 
     update(): void {
         this.perfMonitor.frameStart()
-        this.perfMonitor.physicsStart()
 
-        // Physics runs inside updateVisuals via fixed timestep
+        // Track visual systems (camera + rendering) time
+        this.perfMonitor.renderStart()
         this.world.updateVisuals()
-
-        this.perfMonitor.physicsEnd()
+        this.perfMonitor.renderEnd()
 
         const entityCount = this.world.query(Mass).length
         this.perfMonitor.frameEnd(entityCount)
