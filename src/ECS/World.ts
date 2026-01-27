@@ -56,6 +56,9 @@ export class World {
     private ticker: Ticker
     private _lastVisualUpdate: number = 0
 
+    // Performance monitoring callback
+    onSimTick?: () => void
+
     constructor(simulationFrequency: number = 60) {
         this.ticker = new Ticker(simulationFrequency, () => this.tickSimulation())
 
@@ -100,6 +103,10 @@ export class World {
             system.update(this, dt)
         }
         this.flush()
+        // Notify performance monitor of simulation tick
+        if (this.onSimTick) {
+            this.onSimTick()
+        }
     }
 
     updateVisuals(): void {

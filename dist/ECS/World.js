@@ -25,6 +25,8 @@ export class World {
     // Time management
     ticker;
     _lastVisualUpdate = 0;
+    // Performance monitoring callback
+    onSimTick;
     constructor(simulationFrequency = 60) {
         this.ticker = new Ticker(simulationFrequency, () => this.tickSimulation());
         // Initialize component storage for all known components
@@ -61,6 +63,10 @@ export class World {
             system.update(this, dt);
         }
         this.flush();
+        // Notify performance monitor of simulation tick
+        if (this.onSimTick) {
+            this.onSimTick();
+        }
     }
     updateVisuals() {
         const now = performance.now();
