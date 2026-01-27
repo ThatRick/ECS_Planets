@@ -8,4 +8,4 @@ export { SpatialHash } from './SpatialHash.js';
 export { PhysicsConfig } from './PhysicsConfig.js';
 export { QuadTree } from './QuadTree.js';
 // Systems
-export { GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './systems/index.js';
+export { GravitySystemSimple, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './systems/index.js';

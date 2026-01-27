@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { World } from '../ECS/World'
 import { Position, Velocity, Mass, Size, Temperature } from '../ECS/Components'
 import { PhysicsConfig } from '../ECS/PhysicsConfig'
-import { GravitySystemOptimized } from '../ECS/systems/GravitySystemOptimized'
+import { GravitySystemSimple } from '../ECS/systems/GravitySystemSimple'
 import { GravitySystemBarnesHut } from '../ECS/systems/GravitySystemBarnesHut'
 import Vec2 from '../lib/Vector2'
 
@@ -61,7 +61,7 @@ describe('Gravity System Comparison', () => {
         const entityCounts = [100, 200, 500, 1000, 2000]
 
         console.log('\n┌────────────┬────────────────┬────────────────┬─────────────────┐')
-        console.log('│  Entities  │ Optimized (ms) │ BarnesHut (ms) │ Speedup (BH)    │')
+        console.log('│  Entities  │ Simple (ms)    │ BarnesHut (ms) │ Speedup (BH)    │')
         console.log('├────────────┼────────────────┼────────────────┼─────────────────┤')
 
         for (const count of entityCounts) {
@@ -70,10 +70,10 @@ describe('Gravity System Comparison', () => {
 
             const iterations = Math.max(3, Math.floor(200 / count))
 
-            const optimizedMs = benchmark(
-                'Optimized',
+            const simpleMs = benchmark(
+                'Simple',
                 () => {
-                    GravitySystemOptimized.update(world1, 0.01)
+                    GravitySystemSimple.update(world1, 0.01)
                     world1.flush()
                 },
                 iterations
@@ -88,9 +88,9 @@ describe('Gravity System Comparison', () => {
                 iterations
             )
 
-            const speedup = optimizedMs / barnesHutMs
+            const speedup = simpleMs / barnesHutMs
             const entities = count.toString().padStart(10)
-            const opt = optimizedMs.toFixed(3).padStart(14)
+            const opt = simpleMs.toFixed(3).padStart(14)
             const bh = barnesHutMs.toFixed(3).padStart(14)
             const speed = speedup.toFixed(2).padStart(14) + 'x'
 
@@ -126,7 +126,7 @@ describe('Gravity System Comparison', () => {
         }
 
         // Run both systems
-        GravitySystemOptimized.update(world1, 1.0)
+        GravitySystemSimple.update(world1, 1.0)
         GravitySystemBarnesHut.update(world2, 1.0)
 
         // Compare results

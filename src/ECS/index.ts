@@ -22,7 +22,7 @@ export { QuadTree, Body } from './QuadTree.js'
 
 // Systems
 export {
-    GravitySystemOptimized,
+    GravitySystemSimple,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
     createPlanetRenderer,

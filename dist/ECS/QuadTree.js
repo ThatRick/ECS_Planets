@@ -319,7 +319,7 @@ export class Octree {
         const softeningSq = softening * softening;
         const thetaSq = this.thetaSq;
         for (let bi = 0; bi < activeCount; bi++) {
-            if (skip?.has(bi))
+            if (skip?.[bi])
                 continue;
             const body = bodies[bi];
             const bodyX = body.x;

@@ -396,7 +396,7 @@ export class Octree {
         accX: Float64Array,
         accY: Float64Array,
         accZ: Float64Array,
-        skip?: Set<number>  // Indices to skip (e.g., merged bodies)
+        skip?: Uint8Array  // Indices to skip (e.g., merged bodies)
     ): void {
         if (!this.root) return
 
@@ -404,7 +404,7 @@ export class Octree {
         const thetaSq = this.thetaSq
 
         for (let bi = 0; bi < activeCount; bi++) {
-            if (skip?.has(bi)) continue
+            if (skip?.[bi]) continue
 
             const body = bodies[bi]
             const bodyX = body.x

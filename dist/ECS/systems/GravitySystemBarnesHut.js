@@ -44,6 +44,7 @@ function ensureScratch(count) {
             accX: new Float64Array(capacity),
             accY: new Float64Array(capacity),
             accZ: new Float64Array(capacity),
+            mergedFlags: new Uint8Array(capacity),
             entities: new Array(capacity),
             capacity
         };
@@ -56,6 +57,7 @@ function ensureScratch(count) {
     scratch.accX.fill(0, 0, count);
     scratch.accY.fill(0, 0, count);
     scratch.accZ.fill(0, 0, count);
+    scratch.mergedFlags.fill(0, 0, count);
 }
 export const GravitySystemBarnesHut = {
     name: 'GravityBarnesHut',
@@ -68,6 +70,7 @@ export const GravitySystemBarnesHut = {
         ensureScratch(count);
         const s = scratch;
         const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier, maxImpactTemperature } = PhysicsConfig;
+        const mergedFlags = s.mergedFlags;
         // Copy data to contiguous arrays (SOA layout)
         for (let i = 0; i < count; i++) {
             const id = entityIds[i];
@@ -94,6 +97,7 @@ export const GravitySystemBarnesHut = {
             bodies[i].index = i;
         }
         // ========== Collision Detection with 3D Spatial Hash ==========
+        const collisionStart = performance.now();
         let maxSize = 0;
         for (let i = 0; i < count; i++) {
             if (s.size[i] > maxSize)
@@ -111,10 +115,9 @@ export const GravitySystemBarnesHut = {
         for (let i = 0; i < count; i++) {
             spatialHash.insert(i, s.posX[i], s.posY[i], s.posZ[i], s.size[i]);
         }
-        const mergedIndices = new Set();
         const pairs = spatialHash.getPotentialPairs();
         for (const [iA, iB] of pairs) {
-            if (mergedIndices.has(iA) || mergedIndices.has(iB))
+            if (mergedFlags[iA] || mergedFlags[iB])
                 continue;
             const dx = s.posX[iB] - s.posX[iA];
             const dy = s.posY[iB] - s.posY[iA];
@@ -156,30 +159,35 @@ export const GravitySystemBarnesHut = {
                 bodies[winner].y = newPy;
                 bodies[winner].z = newPz;
                 bodies[winner].mass = combinedMass;
-                mergedIndices.add(loser);
+                mergedFlags[loser] = 1;
             }
         }
+        world.onCollisionTime?.(performance.now() - collisionStart);
         // Remove merged entities
-        for (const idx of mergedIndices) {
-            world.removeEntity(s.entities[idx]);
+        for (let i = 0; i < count; i++) {
+            if (mergedFlags[i]) {
+                world.removeEntity(s.entities[i]);
+            }
         }
         // ========== Barnes-Hut Gravity Calculation O(n log n) ==========
+        const gravityStart = performance.now();
         // Build Octree (exclude merged bodies)
         const activeBodies = [];
         for (let i = 0; i < count; i++) {
-            if (!mergedIndices.has(i)) {
+            if (!mergedFlags[i]) {
                 activeBodies.push(bodies[i]);
             }
         }
         octree.theta = 0.8; // Favor speed over accuracy for real-time
         octree.build(activeBodies);
         // Calculate all accelerations in one batch (avoids object allocation overhead)
-        octree.calculateAllForces(bodies, count, G, SOFTENING, s.accX, s.accY, s.accZ, mergedIndices);
+        octree.calculateAllForces(bodies, count, G, SOFTENING, s.accX, s.accY, s.accZ, mergedFlags);
+        world.onGravityTime?.(performance.now() - gravityStart);
         // ========== Velocity Verlet Integration ==========
         const halfDt = dt / 2;
         // First half velocity update + position update
         for (let i = 0; i < count; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             s.velX[i] += s.accX[i] * halfDt;
             s.velY[i] += s.accY[i] * halfDt;
@@ -193,7 +201,7 @@ export const GravitySystemBarnesHut = {
         // (Full Verlet would rebuild the tree and recalculate forces)
         // Second half velocity update + thermal simulation
         for (let i = 0; i < count; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             s.velX[i] += s.accX[i] * halfDt;
             s.velY[i] += s.accY[i] * halfDt;
@@ -206,7 +214,7 @@ export const GravitySystemBarnesHut = {
         }
         // ========== Write back to World ==========
         for (let i = 0; i < count; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             const id = s.entities[i];
             const pos = world.getComponent(id, Position);

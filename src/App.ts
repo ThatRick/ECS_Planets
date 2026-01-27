@@ -8,7 +8,7 @@ import {
     Temperature,
     CameraComponent,
     PhysicsConfig,
-    GravitySystemOptimized,
+    GravitySystemSimple,
     GravitySystemBarnesHut,
     createCameraMovementSystem,
     createPlanetRendererWebGL,
@@ -18,11 +18,11 @@ import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } 
 import { createSettingsPanel, SimSettings, DEFAULT_SETTINGS, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 
-export type GravityType = 'optimized' | 'barnes-hut'
+export type GravityType = 'simple' | 'barnes-hut'
 export type RendererType = 'webgl' | 'canvas'
 
 const GRAVITY_SYSTEMS: Record<GravityType, System> = {
-    'optimized': GravitySystemOptimized,
+    'simple': GravitySystemSimple,
     'barnes-hut': GravitySystemBarnesHut
 }
 
@@ -369,6 +369,10 @@ export default class App {
 
         // Hook up simulation tick tracking for performance monitoring
         world.onSimTick = () => this.perfMonitor.simTick()
+        world.onPhysicsStart = () => this.perfMonitor.physicsStart()
+        world.onPhysicsEnd = () => this.perfMonitor.physicsEnd()
+        world.onGravityTime = (ms) => this.perfMonitor.recordGravityTime(ms)
+        world.onCollisionTime = (ms) => this.perfMonitor.recordCollisionTime(ms)
 
         console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`)
     }

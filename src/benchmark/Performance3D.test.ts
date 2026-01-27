@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { World } from '../ECS/World'
 import { Position, Velocity, Mass, Size, Temperature } from '../ECS/Components'
 import { PhysicsConfig } from '../ECS/PhysicsConfig'
-import { GravitySystemOptimized } from '../ECS/systems/GravitySystemOptimized'
+import { GravitySystemSimple } from '../ECS/systems/GravitySystemSimple'
 import { GravitySystemBarnesHut } from '../ECS/systems/GravitySystemBarnesHut'
 import { SpatialHash3D } from '../ECS/SpatialHash'
 import Vec3 from '../lib/Vector3'
@@ -144,14 +144,14 @@ describe('3D Performance Analysis', () => {
         // Disc mode
         const worldDisc = createWorld3D(count, 'disc')
         const discResult = benchmark(() => {
-            GravitySystemOptimized.update(worldDisc, 0.01)
+            GravitySystemSimple.update(worldDisc, 0.01)
             worldDisc.flush()
         }, iterations)
 
         // Sphere mode
         const worldSphere = createWorld3D(count, 'sphere')
         const sphereResult = benchmark(() => {
-            GravitySystemOptimized.update(worldSphere, 0.01)
+            GravitySystemSimple.update(worldSphere, 0.01)
             worldSphere.flush()
         }, iterations)
 
@@ -170,7 +170,7 @@ describe('3D Performance Analysis', () => {
         const counts = [500, 1000, 2000, 3000]
 
         console.log('\n┌────────────┬────────────────┬────────────────┬────────────────┐')
-        console.log('│  Entities  │ Optimized (ms) │ BarnesHut (ms) │ BH Speedup     │')
+        console.log('│  Entities  │ Simple (ms)    │ BarnesHut (ms) │ BH Speedup     │')
         console.log('├────────────┼────────────────┼────────────────┼────────────────┤')
 
         for (const count of counts) {
@@ -180,7 +180,7 @@ describe('3D Performance Analysis', () => {
             const iterations = Math.max(3, Math.floor(100 / (count / 500)))
 
             const optResult = benchmark(() => {
-                GravitySystemOptimized.update(world1, 0.01)
+                GravitySystemSimple.update(world1, 0.01)
                 world1.flush()
             }, iterations)
 

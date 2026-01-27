@@ -5,6 +5,9 @@ import { PhysicsConfig } from '../PhysicsConfig.js';
  * Pre-allocated scratch space for 3D physics calculations (module-level singleton)
  */
 let scratch = null;
+// Reusable SpatialHash instance (cleared each frame)
+let spatialHash = null;
+let lastCellSize = 0;
 function ensureScratch(count) {
     if (!scratch || scratch.capacity < count) {
         const capacity = Math.max(count, (scratch?.capacity || 0) * 2, 512);
@@ -21,6 +24,7 @@ function ensureScratch(count) {
             accX: new Float64Array(capacity),
             accY: new Float64Array(capacity),
             accZ: new Float64Array(capacity),
+            mergedFlags: new Uint8Array(capacity),
             entityIds: new Array(capacity),
             capacity
         };
@@ -29,10 +33,11 @@ function ensureScratch(count) {
     scratch.accX.fill(0, 0, count);
     scratch.accY.fill(0, 0, count);
     scratch.accZ.fill(0, 0, count);
+    scratch.mergedFlags.fill(0, 0, count);
     return scratch;
 }
 /**
- * Optimized 3D N-body gravitational simulation using TypedArrays
+ * Simple 3D N-body gravitational simulation using TypedArrays
  *
  * Optimizations:
  * - Direct Float64Array access (no Map lookups)
@@ -40,8 +45,8 @@ function ensureScratch(count) {
  * - Newton's 3rd law symmetry (compute each pair once)
  * - Inline vector math (no temporary Vec3 objects)
  */
-export const GravitySystemOptimized = {
-    name: 'GravityOptimized',
+export const GravitySystemSimple = {
+    name: 'GravitySimple',
     phase: 'simulate',
     update(world, dt) {
         const entities = world.query(Position, Velocity, Mass, Size, Temperature);
@@ -51,7 +56,7 @@ export const GravitySystemOptimized = {
         const { G, heatCapacity, stefanBoltzmann, minTemperature, impactHeatMultiplier, maxImpactTemperature } = PhysicsConfig;
         // Ensure scratch space
         const s = ensureScratch(n);
-        const { posX, posY, posZ, velX, velY, velZ, mass, size, temp, accX, accY, accZ, entityIds } = s;
+        const { posX, posY, posZ, velX, velY, velZ, mass, size, temp, accX, accY, accZ, entityIds, mergedFlags } = s;
         // Copy data to contiguous arrays (cache-friendly access pattern)
         for (let i = 0; i < n; i++) {
             const id = entities[i];
@@ -69,19 +74,26 @@ export const GravitySystemOptimized = {
             temp[i] = world.getComponent(id, Temperature);
         }
         // ========== Collision Detection with 3D Spatial Hash ==========
+        const collisionStart = performance.now();
         let maxSize = 0;
         for (let i = 0; i < n; i++) {
             if (size[i] > maxSize)
                 maxSize = size[i];
         }
-        const spatialHash = new SpatialHash3D(maxSize * 4);
+        const cellSize = maxSize * 4;
+        if (!spatialHash || Math.abs(cellSize - lastCellSize) > lastCellSize * 0.5) {
+            spatialHash = new SpatialHash3D(cellSize);
+            lastCellSize = cellSize;
+        }
+        else {
+            spatialHash.clear();
+        }
         for (let i = 0; i < n; i++) {
             spatialHash.insert(i, posX[i], posY[i], posZ[i], size[i]);
         }
-        const mergedIndices = new Set();
         const pairs = spatialHash.getPotentialPairs();
         for (const [iA, iB] of pairs) {
-            if (mergedIndices.has(iA) || mergedIndices.has(iB))
+            if (mergedFlags[iA] || mergedFlags[iB])
                 continue;
             const dx = posX[iB] - posX[iA];
             const dy = posY[iB] - posY[iA];
@@ -118,24 +130,28 @@ export const GravitySystemOptimized = {
                 mass[winner] = combinedMass;
                 size[winner] = PhysicsConfig.bodySize(combinedMass);
                 temp[winner] = Math.min(combinedTemp + impactHeat, maxImpactTemperature);
-                mergedIndices.add(loser);
+                mergedFlags[loser] = 1;
             }
         }
+        world.onCollisionTime?.(performance.now() - collisionStart);
         // Remove merged entities
-        for (const idx of mergedIndices) {
-            world.removeEntity(entityIds[idx]);
+        for (let i = 0; i < n; i++) {
+            if (mergedFlags[i]) {
+                world.removeEntity(entityIds[i]);
+            }
         }
-        // ========== Gravity Calculation (O(n²) but optimized) ==========
+        // ========== Gravity Calculation (O(n²) direct) ==========
+        const gravityStart = performance.now();
         // Using Newton's 3rd law: compute force once per pair
         for (let i = 0; i < n; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             const pxi = posX[i];
             const pyi = posY[i];
             const pzi = posZ[i];
             const mi = mass[i];
             for (let j = i + 1; j < n; j++) {
-                if (mergedIndices.has(j))
+                if (mergedFlags[j])
                     continue;
                 const dx = posX[j] - pxi;
                 const dy = posY[j] - pyi;
@@ -161,7 +177,7 @@ export const GravitySystemOptimized = {
         const halfDt = dt / 2;
         // First half velocity update + position update
         for (let i = 0; i < n; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             velX[i] += accX[i] * halfDt;
             velY[i] += accY[i] * halfDt;
@@ -175,14 +191,14 @@ export const GravitySystemOptimized = {
         accY.fill(0, 0, n);
         accZ.fill(0, 0, n);
         for (let i = 0; i < n; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             const pxi = posX[i];
             const pyi = posY[i];
             const pzi = posZ[i];
             const mi = mass[i];
             for (let j = i + 1; j < n; j++) {
-                if (mergedIndices.has(j))
+                if (mergedFlags[j])
                     continue;
                 const dx = posX[j] - pxi;
                 const dy = posY[j] - pyi;
@@ -203,9 +219,10 @@ export const GravitySystemOptimized = {
                 }
             }
         }
+        world.onGravityTime?.(performance.now() - gravityStart);
         // Second half velocity update + thermal simulation
         for (let i = 0; i < n; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             velX[i] += accX[i] * halfDt;
             velY[i] += accY[i] * halfDt;
@@ -218,7 +235,7 @@ export const GravitySystemOptimized = {
         }
         // ========== Write back to World ==========
         for (let i = 0; i < n; i++) {
-            if (mergedIndices.has(i))
+            if (mergedFlags[i])
                 continue;
             const id = entityIds[i];
             const pos = world.getComponent(id, Position);

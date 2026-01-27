@@ -144,6 +144,11 @@
             font-weight: 500;
         }
 
+        .status-value.monospace {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+            font-variant-numeric: tabular-nums;
+        }
+
         .renderer-badge {
             padding: 3px 8px;
             border-radius: 4px;
@@ -257,11 +262,11 @@
                 </div>
                 <div class="status-item">
                     <span>FPS:</span>
-                    <span id="fpsDisplay" class="status-value">--</span>
+                    <span id="fpsDisplay" class="status-value monospace">--</span>
                 </div>
                 <div class="status-item">
                     <span>Sim:</span>
-                    <span id="simRateDisplay" class="status-value">--</span>
+                    <span id="simRateDisplay" class="status-value monospace">--</span>
                     <span>Hz</span>
                 </div>
                 <span id="rendererBadge" class="renderer-badge">--</span>
