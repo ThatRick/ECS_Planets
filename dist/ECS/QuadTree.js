@@ -1,6 +1,6 @@
 /**
  * Octree implementation for 3D Barnes-Hut gravity algorithm.
- * Also supports 2D mode (z=0) for backward compatibility.
+ * Optimized version with node pooling and reduced allocations.
  *
  * The Barnes-Hut algorithm reduces N-body gravity from O(n²) to O(n log n)
  * by approximating the gravitational effect of distant body groups as a
@@ -9,20 +9,105 @@
  * The "theta" parameter controls accuracy vs speed tradeoff:
  * - theta = 0: exact calculation (same as direct summation)
  * - theta = 0.5: good balance of accuracy and speed
- * - theta = 1.0: faster but less accurate
+ * - theta = 0.7: faster, still reasonably accurate (default)
+ * - theta = 1.0: fastest but less accurate
  */
+// Pre-allocated node pool for zero-allocation tree building
+const NODE_POOL_SIZE = 8192;
+let nodePool = [];
+let nodePoolIndex = 0;
+function initNodePool() {
+    if (nodePool.length === 0) {
+        nodePool = new Array(NODE_POOL_SIZE);
+        for (let i = 0; i < NODE_POOL_SIZE; i++) {
+            nodePool[i] = {
+                cx: 0, cy: 0, cz: 0, halfSize: 0,
+                totalMass: 0, comX: 0, comY: 0, comZ: 0,
+                children: null, body: null, bodyCount: 0
+            };
+        }
+    }
+}
+function resetNodePool() {
+    nodePoolIndex = 0;
+}
+function allocNode(cx, cy, cz, halfSize) {
+    if (nodePoolIndex >= nodePool.length) {
+        // Expand pool if needed
+        const newSize = nodePool.length * 2;
+        for (let i = nodePool.length; i < newSize; i++) {
+            nodePool[i] = {
+                cx: 0, cy: 0, cz: 0, halfSize: 0,
+                totalMass: 0, comX: 0, comY: 0, comZ: 0,
+                children: null, body: null, bodyCount: 0
+            };
+        }
+    }
+    const node = nodePool[nodePoolIndex++];
+    node.cx = cx;
+    node.cy = cy;
+    node.cz = cz;
+    node.halfSize = halfSize;
+    node.totalMass = 0;
+    node.comX = 0;
+    node.comY = 0;
+    node.comZ = 0;
+    node.children = null;
+    node.body = null;
+    node.bodyCount = 0;
+    return node;
+}
+// Pre-allocated children array pool
+const CHILDREN_POOL_SIZE = 1024;
+let childrenPool = [];
+let childrenPoolIndex = 0;
+function initChildrenPool() {
+    if (childrenPool.length === 0) {
+        childrenPool = new Array(CHILDREN_POOL_SIZE);
+        for (let i = 0; i < CHILDREN_POOL_SIZE; i++) {
+            childrenPool[i] = [null, null, null, null, null, null, null, null];
+        }
+    }
+}
+function resetChildrenPool() {
+    childrenPoolIndex = 0;
+}
+function allocChildren() {
+    if (childrenPoolIndex >= childrenPool.length) {
+        const newSize = childrenPool.length * 2;
+        for (let i = childrenPool.length; i < newSize; i++) {
+            childrenPool[i] = [null, null, null, null, null, null, null, null];
+        }
+    }
+    const arr = childrenPool[childrenPoolIndex++];
+    arr[0] = arr[1] = arr[2] = arr[3] = arr[4] = arr[5] = arr[6] = arr[7] = null;
+    return arr;
+}
+// Pre-allocated stack for iterative tree traversal
+const traversalStack = new Array(256);
 export class Octree {
     root = null;
     // Theta parameter for Barnes-Hut approximation
     // Lower = more accurate, higher = faster
-    theta = 0.5;
+    theta = 0.7; // Optimized default
+    // Theta squared for avoiding sqrt in criterion check
+    thetaSq = 0.49;
     // Maximum tree depth to prevent infinite recursion for coincident bodies
     static MAX_DEPTH = 50;
+    constructor() {
+        initNodePool();
+        initChildrenPool();
+    }
     /**
      * Build the Octree from an array of bodies.
      * Call this once per frame before computing forces.
      */
     build(bodies) {
+        // Reset pools for reuse
+        resetNodePool();
+        resetChildrenPool();
+        // Update thetaSq when theta might have changed
+        this.thetaSq = this.theta * this.theta;
         if (bodies.length === 0) {
             this.root = null;
             return;
@@ -31,7 +116,8 @@ export class Octree {
         let minX = Infinity, maxX = -Infinity;
         let minY = Infinity, maxY = -Infinity;
         let minZ = Infinity, maxZ = -Infinity;
-        for (const body of bodies) {
+        for (let i = 0; i < bodies.length; i++) {
+            const body = bodies[i];
             const z = body.z ?? 0;
             if (body.x < minX)
                 minX = body.x;
@@ -50,31 +136,19 @@ export class Octree {
         const width = maxX - minX;
         const height = maxY - minY;
         const depth = maxZ - minZ;
-        const size = Math.max(width, height, depth, 1) * 1.1 + 1; // Add small padding, ensure non-zero
+        const size = Math.max(width, height, depth, 1) * 1.1 + 1;
         const halfSize = size / 2;
         const cx = (minX + maxX) / 2;
         const cy = (minY + maxY) / 2;
         const cz = (minZ + maxZ) / 2;
-        // Create root node
-        this.root = this.createNode(cx, cy, cz, halfSize);
+        // Create root node from pool
+        this.root = allocNode(cx, cy, cz, halfSize);
         // Insert all bodies
-        for (const body of bodies) {
-            this.insert(this.root, body, 0);
+        for (let i = 0; i < bodies.length; i++) {
+            this.insert(this.root, bodies[i], 0);
         }
         // Compute mass distributions (bottom-up)
         this.computeMassDistribution(this.root);
-    }
-    createNode(cx, cy, cz, halfSize) {
-        return {
-            cx, cy, cz, halfSize,
-            totalMass: 0,
-            comX: 0,
-            comY: 0,
-            comZ: 0,
-            children: null,
-            body: null,
-            bodyCount: 0
-        };
     }
     insert(node, body, depth) {
         // If this is an empty leaf, store the body here
@@ -84,7 +158,6 @@ export class Octree {
             return;
         }
         // If at max depth, just aggregate the body into this node
-        // (handles coincident bodies without infinite recursion)
         if (depth >= Octree.MAX_DEPTH) {
             node.bodyCount++;
             return;
@@ -107,19 +180,18 @@ export class Octree {
         node.bodyCount++;
     }
     subdivide(node) {
-        const hs = node.halfSize / 2; // Half of half size = quarter size
+        const hs = node.halfSize / 2;
+        // Use pooled children array
+        node.children = allocChildren();
         // 8 octants: indexed by (z << 2) | (y << 1) | x
-        // where x,y,z are 0 for negative, 1 for positive
-        node.children = [
-            this.createNode(node.cx - hs, node.cy - hs, node.cz - hs, hs), // 0: ---
-            this.createNode(node.cx + hs, node.cy - hs, node.cz - hs, hs), // 1: +--
-            this.createNode(node.cx - hs, node.cy + hs, node.cz - hs, hs), // 2: -+-
-            this.createNode(node.cx + hs, node.cy + hs, node.cz - hs, hs), // 3: ++-
-            this.createNode(node.cx - hs, node.cy - hs, node.cz + hs, hs), // 4: --+
-            this.createNode(node.cx + hs, node.cy - hs, node.cz + hs, hs), // 5: +-+
-            this.createNode(node.cx - hs, node.cy + hs, node.cz + hs, hs), // 6: -++
-            this.createNode(node.cx + hs, node.cy + hs, node.cz + hs, hs) // 7: +++
-        ];
+        node.children[0] = allocNode(node.cx - hs, node.cy - hs, node.cz - hs, hs);
+        node.children[1] = allocNode(node.cx + hs, node.cy - hs, node.cz - hs, hs);
+        node.children[2] = allocNode(node.cx - hs, node.cy + hs, node.cz - hs, hs);
+        node.children[3] = allocNode(node.cx + hs, node.cy + hs, node.cz - hs, hs);
+        node.children[4] = allocNode(node.cx - hs, node.cy - hs, node.cz + hs, hs);
+        node.children[5] = allocNode(node.cx + hs, node.cy - hs, node.cz + hs, hs);
+        node.children[6] = allocNode(node.cx - hs, node.cy + hs, node.cz + hs, hs);
+        node.children[7] = allocNode(node.cx + hs, node.cy + hs, node.cz + hs, hs);
     }
     getOctant(node, body) {
         const z = body.z ?? 0;
@@ -146,7 +218,8 @@ export class Octree {
         let comY = 0;
         let comZ = 0;
         if (node.children) {
-            for (const child of node.children) {
+            for (let i = 0; i < 8; i++) {
+                const child = node.children[i];
                 if (child && child.bodyCount > 0) {
                     this.computeMassDistribution(child);
                     totalMass += child.totalMass;
@@ -165,8 +238,8 @@ export class Octree {
     }
     /**
      * Calculate force on a body using Barnes-Hut approximation.
-     * Returns {fx, fy, fz} force components (not yet divided by mass).
-     * For 2D compatibility, fz will be 0 if all bodies have z=0.
+     * Returns {fx, fy, fz} acceleration components.
+     * Optimized with squared distance comparisons.
      */
     calculateForce(body, G, softening = 100) {
         if (!this.root) {
@@ -176,42 +249,46 @@ export class Octree {
         let fy = 0;
         let fz = 0;
         const softeningSq = softening * softening;
+        const bodyX = body.x;
+        const bodyY = body.y;
         const bodyZ = body.z ?? 0;
-        const stack = [this.root];
-        while (stack.length > 0) {
-            const node = stack.pop();
+        const bodyIndex = body.index;
+        const thetaSq = this.thetaSq;
+        // Use pre-allocated stack for iterative traversal
+        let stackTop = 0;
+        traversalStack[stackTop++] = this.root;
+        while (stackTop > 0) {
+            const node = traversalStack[--stackTop];
             if (node.bodyCount === 0)
                 continue;
             // Distance from body to node's center of mass
-            const dx = node.comX - body.x;
-            const dy = node.comY - body.y;
+            const dx = node.comX - bodyX;
+            const dy = node.comY - bodyY;
             const dz = node.comZ - bodyZ;
             const distSq = dx * dx + dy * dy + dz * dz;
-            const dist = Math.sqrt(distSq);
             // If this is a leaf with a single body
             if (node.body !== null) {
                 // Don't compute self-interaction
-                if (node.body.index === body.index)
+                if (node.body.index === bodyIndex)
                     continue;
                 // Direct force calculation
                 const softDistSq = distSq + softeningSq;
-                const invDist = 1 / Math.sqrt(softDistSq);
-                const invDistCubed = invDist * invDist * invDist;
+                const dist = Math.sqrt(softDistSq);
+                const invDistCubed = 1 / (softDistSq * dist);
                 const forceMag = G * node.body.mass * invDistCubed;
                 fx += dx * forceMag;
                 fy += dy * forceMag;
                 fz += dz * forceMag;
                 continue;
             }
-            // Barnes-Hut criterion: s/d < theta
-            // s = node size (2 * halfSize), d = distance to center of mass
-            const nodeSize = node.halfSize * 2;
-            const ratio = nodeSize / (dist + 0.001); // Avoid division by zero
-            if (ratio < this.theta) {
+            // Barnes-Hut criterion using squared values: (s/d)² < θ²
+            // Equivalent to: s² < θ² * d²
+            const nodeSizeSq = node.halfSize * node.halfSize * 4; // (2*halfSize)²
+            if (nodeSizeSq < thetaSq * distSq) {
                 // Node is far enough - use center of mass approximation
                 const softDistSq = distSq + softeningSq;
-                const invDist = 1 / Math.sqrt(softDistSq);
-                const invDistCubed = invDist * invDist * invDist;
+                const dist = Math.sqrt(softDistSq);
+                const invDistCubed = 1 / (softDistSq * dist);
                 const forceMag = G * node.totalMass * invDistCubed;
                 fx += dx * forceMag;
                 fy += dy * forceMag;
@@ -220,15 +297,93 @@ export class Octree {
             else {
                 // Node is too close - recurse into children
                 if (node.children) {
-                    for (const child of node.children) {
+                    for (let i = 0; i < 8; i++) {
+                        const child = node.children[i];
                         if (child && child.bodyCount > 0) {
-                            stack.push(child);
+                            traversalStack[stackTop++] = child;
                         }
                     }
                 }
             }
         }
         return { fx, fy, fz };
+    }
+    /**
+     * Calculate forces for all bodies at once, writing directly to acceleration arrays.
+     * This avoids object allocation overhead of individual calculateForce calls.
+     */
+    calculateAllForces(bodies, activeCount, G, softening, accX, accY, accZ, skip // Indices to skip (e.g., merged bodies)
+    ) {
+        if (!this.root)
+            return;
+        const softeningSq = softening * softening;
+        const thetaSq = this.thetaSq;
+        for (let bi = 0; bi < activeCount; bi++) {
+            if (skip?.has(bi))
+                continue;
+            const body = bodies[bi];
+            const bodyX = body.x;
+            const bodyY = body.y;
+            const bodyZ = body.z ?? 0;
+            const bodyIndex = body.index;
+            let fx = 0;
+            let fy = 0;
+            let fz = 0;
+            // Use pre-allocated stack for iterative traversal
+            let stackTop = 0;
+            traversalStack[stackTop++] = this.root;
+            while (stackTop > 0) {
+                const node = traversalStack[--stackTop];
+                if (node.bodyCount === 0)
+                    continue;
+                // Distance from body to node's center of mass
+                const dx = node.comX - bodyX;
+                const dy = node.comY - bodyY;
+                const dz = node.comZ - bodyZ;
+                const distSq = dx * dx + dy * dy + dz * dz;
+                // If this is a leaf with a single body
+                if (node.body !== null) {
+                    // Don't compute self-interaction
+                    if (node.body.index === bodyIndex)
+                        continue;
+                    // Direct force calculation
+                    const softDistSq = distSq + softeningSq;
+                    const dist = Math.sqrt(softDistSq);
+                    const invDistCubed = 1 / (softDistSq * dist);
+                    const forceMag = G * node.body.mass * invDistCubed;
+                    fx += dx * forceMag;
+                    fy += dy * forceMag;
+                    fz += dz * forceMag;
+                    continue;
+                }
+                // Barnes-Hut criterion using squared values
+                const nodeSizeSq = node.halfSize * node.halfSize * 4;
+                if (nodeSizeSq < thetaSq * distSq) {
+                    // Node is far enough - use center of mass approximation
+                    const softDistSq = distSq + softeningSq;
+                    const dist = Math.sqrt(softDistSq);
+                    const invDistCubed = 1 / (softDistSq * dist);
+                    const forceMag = G * node.totalMass * invDistCubed;
+                    fx += dx * forceMag;
+                    fy += dy * forceMag;
+                    fz += dz * forceMag;
+                }
+                else {
+                    // Node is too close - recurse into children
+                    if (node.children) {
+                        for (let i = 0; i < 8; i++) {
+                            const child = node.children[i];
+                            if (child && child.bodyCount > 0) {
+                                traversalStack[stackTop++] = child;
+                            }
+                        }
+                    }
+                }
+            }
+            accX[bi] = fx;
+            accY[bi] = fy;
+            accZ[bi] = fz;
+        }
     }
     /**
      * Get statistics about the tree for debugging
@@ -244,12 +399,12 @@ export class Octree {
             nodeCount++;
             if (depth > maxDepth)
                 maxDepth = depth;
-            // Count bodies: leaf nodes have bodyCount > 0 and no children
             if (!node.children) {
                 bodyCount += node.bodyCount;
             }
             if (node.children) {
-                for (const child of node.children) {
+                for (let i = 0; i < 8; i++) {
+                    const child = node.children[i];
                     if (child)
                         traverse(child, depth + 1);
                 }

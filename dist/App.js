@@ -14,7 +14,7 @@ export default class App {
     world;
     bodyCountEl;
     perfMonitor;
-    currentGravityType = 'optimized';
+    currentGravityType = 'barnes-hut';
     currentRenderer = 'canvas';
     isRunning = false;
     playPauseBtn;
@@ -237,7 +237,7 @@ export default class App {
         }
         // Register systems
         // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystemOptimized);
+        world.registerSystem(GravitySystemBarnesHut);
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas));
         // Use WebGL renderer (required for 3D)
@@ -256,6 +256,8 @@ export default class App {
         this.updateBodyCount();
         // Update settings panel with initial values
         updateSettingsPanelValues(config);
+        // Hook up simulation tick tracking for performance monitoring
+        world.onSimTick = () => this.perfMonitor.simTick();
         console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`);
     }
     bindControls() {
@@ -319,10 +321,10 @@ export default class App {
     }
     update() {
         this.perfMonitor.frameStart();
-        this.perfMonitor.physicsStart();
-        // Physics runs inside updateVisuals via fixed timestep
+        // Track visual systems (camera + rendering) time
+        this.perfMonitor.renderStart();
         this.world.updateVisuals();
-        this.perfMonitor.physicsEnd();
+        this.perfMonitor.renderEnd();
         const entityCount = this.world.query(Mass).length;
         this.perfMonitor.frameEnd(entityCount);
     }
