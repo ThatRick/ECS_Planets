@@ -48,6 +48,10 @@ const octree = new Octree()
 // Reusable bodies array for Octree
 let bodies: Body[] = []
 
+// Reusable SpatialHash instance (cleared each frame)
+let spatialHash: SpatialHash3D | null = null
+let lastCellSize = 0
+
 function ensureScratch(count: number): void {
     if (!scratch || scratch.capacity < count) {
         const capacity = Math.max(count, 512)
@@ -125,7 +129,14 @@ export const GravitySystemBarnesHut: System = {
             if (s.size[i] > maxSize) maxSize = s.size[i]
         }
 
-        const spatialHash = new SpatialHash3D(maxSize * 4)
+        const cellSize = maxSize * 4
+        // Reuse or recreate spatial hash if cell size changed significantly
+        if (!spatialHash || Math.abs(cellSize - lastCellSize) > lastCellSize * 0.5) {
+            spatialHash = new SpatialHash3D(cellSize)
+            lastCellSize = cellSize
+        } else {
+            spatialHash.clear()
+        }
         for (let i = 0; i < count; i++) {
             spatialHash.insert(i, s.posX[i], s.posY[i], s.posZ[i], s.size[i])
         }
@@ -201,18 +212,11 @@ export const GravitySystemBarnesHut: System = {
             }
         }
 
-        octree.theta = 0.5  // Balance of accuracy and speed
+        octree.theta = 0.8  // Favor speed over accuracy for real-time
         octree.build(activeBodies)
 
-        // Calculate accelerations using Barnes-Hut
-        for (let i = 0; i < count; i++) {
-            if (mergedIndices.has(i)) continue
-
-            const force = octree.calculateForce(bodies[i], G, SOFTENING)
-            s.accX[i] = force.fx
-            s.accY[i] = force.fy
-            s.accZ[i] = force.fz
-        }
+        // Calculate all accelerations in one batch (avoids object allocation overhead)
+        octree.calculateAllForces(bodies, count, G, SOFTENING, s.accX, s.accY, s.accZ, mergedIndices)
 
         // ========== Velocity Verlet Integration ==========
         const halfDt = dt / 2

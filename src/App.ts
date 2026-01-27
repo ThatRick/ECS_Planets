@@ -35,7 +35,7 @@ export default class App {
     world: World
     private bodyCountEl: HTMLElement | null
     private perfMonitor: PerfMonitor
-    private currentGravityType: GravityType = 'optimized'
+    private currentGravityType: GravityType = 'barnes-hut'
     private currentRenderer: RendererType = 'canvas'
     private isRunning: boolean = false
     private playPauseBtn: HTMLElement | null
@@ -344,7 +344,7 @@ export default class App {
 
         // Register systems
         // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystemOptimized)
+        world.registerSystem(GravitySystemBarnesHut)
 
         // Visual systems (run on requestAnimationFrame)
         world.registerSystem(createCameraMovementSystem(this.canvas))
