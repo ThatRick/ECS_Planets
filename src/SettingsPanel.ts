@@ -258,8 +258,8 @@ export function createSettingsPanel(
                 <div class="field">
                     <label>Gravity Algorithm</label>
                     <select id="set-gravityAlgo">
-                        <option value="optimized" selected>O(n²) Direct</option>
-                        <option value="barnes-hut">O(n log n) Barnes-Hut</option>
+                        <option value="simple">O(n²) Simple</option>
+                        <option value="barnes-hut" selected>O(n log n) Barnes-Hut</option>
                     </select>
                 </div>
                 <div class="field">

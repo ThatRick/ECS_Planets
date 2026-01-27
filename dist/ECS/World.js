@@ -27,6 +27,10 @@ export class World {
     _lastVisualUpdate = 0;
     // Performance monitoring callback
     onSimTick;
+    onPhysicsStart;
+    onPhysicsEnd;
+    onGravityTime;
+    onCollisionTime;
     constructor(simulationFrequency = 60) {
         this.ticker = new Ticker(simulationFrequency, () => this.tickSimulation());
         // Initialize component storage for all known components
@@ -59,10 +63,12 @@ export class World {
     }
     tickSimulation() {
         const dt = this.ticker.getDeltaTime();
+        this.onPhysicsStart?.();
         for (const system of this.simulationSystems) {
             system.update(this, dt);
         }
         this.flush();
+        this.onPhysicsEnd?.();
         // Notify performance monitor of simulation tick
         if (this.onSimTick) {
             this.onSimTick();

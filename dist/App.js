@@ -1,9 +1,9 @@
 import Vec3 from './lib/Vector3.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemOptimized, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
-    'optimized': GravitySystemOptimized,
+    'simple': GravitySystemSimple,
     'barnes-hut': GravitySystemBarnesHut
 };
 // Unit conversions (matching SettingsPanel)
@@ -258,6 +258,10 @@ export default class App {
         updateSettingsPanelValues(config);
         // Hook up simulation tick tracking for performance monitoring
         world.onSimTick = () => this.perfMonitor.simTick();
+        world.onPhysicsStart = () => this.perfMonitor.physicsStart();
+        world.onPhysicsEnd = () => this.perfMonitor.physicsEnd();
+        world.onGravityTime = (ms) => this.perfMonitor.recordGravityTime(ms);
+        world.onCollisionTime = (ms) => this.perfMonitor.recordCollisionTime(ms);
         console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`);
     }
     bindControls() {
