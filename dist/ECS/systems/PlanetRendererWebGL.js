@@ -17,6 +17,7 @@ uniform mat4 u_viewMatrix;
 uniform mat4 u_projMatrix;
 uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
+uniform float u_minPixelSize;  // Minimum size in pixels (typically 1.0)
 
 // Varyings to fragment shader
 out vec2 v_uv;
@@ -28,8 +29,21 @@ void main() {
     v_uv = a_vertex;
     v_temperature = a_temperature;
 
+    // Transform center to view space to get distance
+    vec4 viewCenter = u_viewMatrix * vec4(a_position, 1.0);
+    float viewDist = -viewCenter.z;  // Distance from camera (positive)
+
+    // Calculate minimum world-space size for minPixelSize screen pixels
+    // projMatrix[1][1] = 1 / tan(fov/2), so tan(fov/2) = 1 / projMatrix[1][1]
+    // screenPixels = (worldSize / viewDist) * (resolution.y / 2) * projMatrix[1][1]
+    // Solving for minWorldSize when screenPixels = minPixelSize:
+    float minWorldSize = (u_minPixelSize * viewDist * 2.0) / (u_resolution.y * u_projMatrix[1][1]);
+
+    // Use the larger of actual size or minimum size
+    float effectiveSize = max(a_size, minWorldSize);
+
     // Billboard: offset from center using camera-aligned axes
-    vec3 worldPos = a_position + u_cameraRight * a_vertex.x * a_size + u_cameraUp * a_vertex.y * a_size;
+    vec3 worldPos = a_position + u_cameraRight * a_vertex.x * effectiveSize + u_cameraUp * a_vertex.y * effectiveSize;
 
     // Transform to view space then clip space
     vec4 viewPos = u_viewMatrix * vec4(worldPos, 1.0);
@@ -119,7 +133,8 @@ export function createPlanetRendererWebGL(canvas) {
         viewMatrix: gl.getUniformLocation(program, 'u_viewMatrix'),
         projMatrix: gl.getUniformLocation(program, 'u_projMatrix'),
         cameraRight: gl.getUniformLocation(program, 'u_cameraRight'),
-        cameraUp: gl.getUniformLocation(program, 'u_cameraUp')
+        cameraUp: gl.getUniformLocation(program, 'u_cameraUp'),
+        minPixelSize: gl.getUniformLocation(program, 'u_minPixelSize')
     };
     // Create VAO
     const vao = gl.createVertexArray();
@@ -282,6 +297,7 @@ export function createPlanetRendererWebGL(canvas) {
             gl.uniformMatrix4fv(uniforms.projMatrix, false, projMatrix);
             gl.uniform3f(uniforms.cameraRight, rightX, rightY, rightZ);
             gl.uniform3f(uniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+            gl.uniform1f(uniforms.minPixelSize, 1.0); // Minimum 1 pixel size
             // Draw all instances with a single draw call
             gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, planetCount);
             gl.bindVertexArray(null);
