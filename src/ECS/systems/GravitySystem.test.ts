@@ -3,7 +3,7 @@ import { World } from '../World'
 import { GravitySystemOptimized } from './GravitySystemOptimized'
 import { Position, Velocity, Mass, Size, Temperature } from '../Components'
 import { PhysicsConfig } from '../PhysicsConfig'
-import Vec2 from '../../lib/Vector2'
+import Vec3 from '../../lib/Vector3'
 
 describe('GravitySystemOptimized', () => {
     let world: World
@@ -28,8 +28,8 @@ describe('GravitySystemOptimized', () => {
         temp: number = 100
     ): number {
         const entity = world.createEntity()
-        world.addComponent(entity, Position, new Vec2(x, y))
-        world.addComponent(entity, Velocity, new Vec2(vx, vy))
+        world.addComponent(entity, Position, new Vec3(x, y, 0))
+        world.addComponent(entity, Velocity, new Vec3(vx, vy, 0))
         world.addComponent(entity, Mass, mass)
         world.addComponent(entity, Size, PhysicsConfig.bodySize(mass))
         world.addComponent(entity, Temperature, temp)
@@ -93,15 +93,15 @@ describe('GravitySystemOptimized', () => {
             })
             const world2 = new World(60)
             const e1Far = world2.createEntity()
-            world2.addComponent(e1Far, Position, new Vec2(0, 0))
-            world2.addComponent(e1Far, Velocity, new Vec2(0, 0))
+            world2.addComponent(e1Far, Position, new Vec3(0, 0, 0))
+            world2.addComponent(e1Far, Velocity, new Vec3(0, 0, 0))
             world2.addComponent(e1Far, Mass, 1e14)
             world2.addComponent(e1Far, Size, PhysicsConfig.bodySize(1e14))
             world2.addComponent(e1Far, Temperature, 100)
 
             const e2Far = world2.createEntity()
-            world2.addComponent(e2Far, Position, new Vec2(50000, 0)) // 10x farther
-            world2.addComponent(e2Far, Velocity, new Vec2(0, 0))
+            world2.addComponent(e2Far, Position, new Vec3(50000, 0, 0)) // 10x farther
+            world2.addComponent(e2Far, Velocity, new Vec3(0, 0, 0))
             world2.addComponent(e2Far, Mass, 1e14)
             world2.addComponent(e2Far, Size, PhysicsConfig.bodySize(1e14))
             world2.addComponent(e2Far, Temperature, 100)
@@ -273,7 +273,7 @@ describe('GravitySystemOptimized', () => {
                 const pos = world.getComponent(orbiter, Position)!
                 const vel = world.getComponent(orbiter, Velocity)!
                 const dist = pos.len()
-                const kinetic = 0.5 * orbitMass * (vel.x ** 2 + vel.y ** 2)
+                const kinetic = 0.5 * orbitMass * (vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
                 const potential = -PhysicsConfig.G * centralMass * orbitMass / dist
                 return kinetic + potential
             }
