@@ -117,11 +117,10 @@ uniform float u_hasUserLocation;  // 0 or 1
 
 out vec4 fragColor;
 
-float gridLine(float coord, float stepRad, float widthPx) {
+float gridLine(float coord, float stepRad, float fw) {
     float halfStep = stepRad * 0.5;
     float d = abs(mod(coord + halfStep, stepRad) - halfStep);
-    float w = max(fwidth(coord) * widthPx, 1e-4);
-    return 1.0 - smoothstep(w, w * 1.5, d);
+    return 1.0 - smoothstep(fw, fw * 1.5, d);
 }
 
 void main() {
@@ -162,14 +161,25 @@ void main() {
     float lonStep = radians(15.0);
     float gridPx = 1.25;
 
+    // Latitude: asin is continuous, so fwidth works directly
+    float fwLat = max(fwidth(lat) * gridPx, 1e-4);
+
+    // Longitude: compute fwidth analytically to avoid atan2 ±π seam artifact.
+    // d(atan(z,x))/ds = (x·dz/ds − z·dx/ds) / (x² + z²)
+    float nxz2 = normalWorld.x * normalWorld.x + normalWorld.z * normalWorld.z;
+    float invNxz2 = 1.0 / max(nxz2, 1e-8);
+    float dlon_dx = (normalWorld.x * dFdx(normalWorld.z) - normalWorld.z * dFdx(normalWorld.x)) * invNxz2;
+    float dlon_dy = (normalWorld.x * dFdy(normalWorld.z) - normalWorld.z * dFdy(normalWorld.x)) * invNxz2;
+    float fwLon = max((abs(dlon_dx) + abs(dlon_dy)) * gridPx, 1e-4);
+
     float grid = max(
-        gridLine(lat, latStep, gridPx),
-        gridLine(lon, lonStep, gridPx)
+        gridLine(lat, latStep, fwLat),
+        gridLine(lon, lonStep, fwLon)
     );
 
     // Slightly emphasize equator and prime meridian
-    float latW = max(fwidth(lat) * gridPx, 1e-4);
-    float lonW = max(fwidth(lon) * gridPx, 1e-4);
+    float latW = fwLat;
+    float lonW = fwLon;
     float eq = 1.0 - smoothstep(latW, latW * 1.5, abs(lat));
     float pm = 1.0 - smoothstep(lonW, lonW * 1.5, abs(lon));
     grid = max(grid, max(eq, pm) * 0.6);

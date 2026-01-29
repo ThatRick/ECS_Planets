@@ -65,15 +65,17 @@ out vec4 fragColor;
 
 void main() {
     float distSq = dot(v_uv, v_uv);
-    float dist = sqrt(distSq);
 
-    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
-    float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha <= 0.0) discard;
+    // AA using fwidth(v_uv) which is perfectly stable (linear interpolant).
+    // Work in distSq-space: the smoothstep upper bound is exactly 1.0,
+    // so nothing outside the unit circle ever receives any alpha.
+    float pixelSize = length(fwidth(v_uv));
+    float edge = max(2.0 * pixelSize, 0.002);
+    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+    if (alpha < 0.01) discard;
 
     // Reconstruct a sphere normal from the projected disc (billboarded sphere)
-    float z = sqrt(max(0.0, 1.0 - distSq));
+    float z = sqrt(1.0 - distSq);  // safe: distSq < 1.0 after discard
     vec3 normal = normalize(vec3(v_uv, z));
 
     // Fixed view-space light direction for a simple 3D look
@@ -89,7 +91,7 @@ void main() {
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
     col += spec * 0.15;
 
-    // Premultiplied alpha to avoid dark fringe at edges
+    // Premultiplied alpha
     fragColor = vec4(col * alpha, alpha);
 }
 `;
@@ -110,23 +112,23 @@ uniform float u_hasUserLocation;  // 0 or 1
 
 out vec4 fragColor;
 
-float gridLine(float coord, float stepRad, float widthPx) {
+float gridLine(float coord, float stepRad, float fw) {
     float halfStep = stepRad * 0.5;
     float d = abs(mod(coord + halfStep, stepRad) - halfStep);
-    float w = max(fwidth(coord) * widthPx, 1e-4);
-    return 1.0 - smoothstep(w, w * 1.5, d);
+    return 1.0 - smoothstep(fw, fw * 1.5, d);
 }
 
 void main() {
     float distSq = dot(v_uv, v_uv);
-    float dist = sqrt(distSq);
 
-    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
-    float aa = fwidth(dist);
-    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha <= 0.0) discard;
+    // AA using fwidth(v_uv) – stable linear interpolant, no sqrt derivatives.
+    // Smoothstep upper bound is exactly 1.0 so nothing outside the circle gets alpha.
+    float pixelSize = length(fwidth(v_uv));
+    float edge = max(2.0 * pixelSize, 0.002);
+    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+    if (alpha < 0.01) discard;
 
-    float z = sqrt(max(0.0, 1.0 - distSq));
+    float z = sqrt(1.0 - distSq);
     vec3 normalLocal = normalize(vec3(v_uv, z));
 
     // Simple lighting in view-facing space
@@ -154,14 +156,25 @@ void main() {
     float lonStep = radians(15.0);
     float gridPx = 1.25;
 
+    // Latitude: asin is continuous, so fwidth works directly
+    float fwLat = max(fwidth(lat) * gridPx, 1e-4);
+
+    // Longitude: compute fwidth analytically to avoid atan2 ±π seam artifact.
+    // d(atan(z,x))/ds = (x·dz/ds − z·dx/ds) / (x² + z²)
+    float nxz2 = normalWorld.x * normalWorld.x + normalWorld.z * normalWorld.z;
+    float invNxz2 = 1.0 / max(nxz2, 1e-8);
+    float dlon_dx = (normalWorld.x * dFdx(normalWorld.z) - normalWorld.z * dFdx(normalWorld.x)) * invNxz2;
+    float dlon_dy = (normalWorld.x * dFdy(normalWorld.z) - normalWorld.z * dFdy(normalWorld.x)) * invNxz2;
+    float fwLon = max((abs(dlon_dx) + abs(dlon_dy)) * gridPx, 1e-4);
+
     float grid = max(
-        gridLine(lat, latStep, gridPx),
-        gridLine(lon, lonStep, gridPx)
+        gridLine(lat, latStep, fwLat),
+        gridLine(lon, lonStep, fwLon)
     );
 
     // Slightly emphasize equator and prime meridian
-    float latW = max(fwidth(lat) * gridPx, 1e-4);
-    float lonW = max(fwidth(lon) * gridPx, 1e-4);
+    float latW = fwLat;
+    float lonW = fwLon;
     float eq = 1.0 - smoothstep(latW, latW * 1.5, abs(lat));
     float pm = 1.0 - smoothstep(lonW, lonW * 1.5, abs(lon));
     grid = max(grid, max(eq, pm) * 0.6);
