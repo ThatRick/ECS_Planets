@@ -69,15 +69,17 @@ out vec4 fragColor;
 
 void main() {
     float distSq = dot(v_uv, v_uv);
-    float dist = sqrt(distSq);
 
-    // Analytic edge AA – clamp width so it never bleeds into quad corners
-    float aa = clamp(fwidth(dist), 0.0, 0.15);
-    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha < 0.005) discard;
+    // AA using fwidth(v_uv) which is perfectly stable (linear interpolant).
+    // Work in distSq-space: the smoothstep upper bound is exactly 1.0,
+    // so nothing outside the unit circle ever receives any alpha.
+    float pixelSize = length(fwidth(v_uv));
+    float edge = max(2.0 * pixelSize, 0.002);
+    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+    if (alpha < 0.01) discard;
 
     // Reconstruct a sphere normal from the projected disc (billboarded sphere)
-    float z = sqrt(max(0.0, 1.0 - distSq));
+    float z = sqrt(1.0 - distSq);  // safe: distSq < 1.0 after discard
     vec3 normal = normalize(vec3(v_uv, z));
 
     // Fixed view-space light direction for a simple 3D look
@@ -93,7 +95,7 @@ void main() {
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
     col += spec * 0.15;
 
-    // Premultiplied alpha to avoid dark fringe at edges
+    // Premultiplied alpha
     fragColor = vec4(col * alpha, alpha);
 }
 `
@@ -124,14 +126,15 @@ float gridLine(float coord, float stepRad, float widthPx) {
 
 void main() {
     float distSq = dot(v_uv, v_uv);
-    float dist = sqrt(distSq);
 
-    // Analytic edge AA – clamp width so it never bleeds into quad corners
-    float aa = clamp(fwidth(dist), 0.0, 0.15);
-    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha < 0.005) discard;
+    // AA using fwidth(v_uv) – stable linear interpolant, no sqrt derivatives.
+    // Smoothstep upper bound is exactly 1.0 so nothing outside the circle gets alpha.
+    float pixelSize = length(fwidth(v_uv));
+    float edge = max(2.0 * pixelSize, 0.002);
+    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+    if (alpha < 0.01) discard;
 
-    float z = sqrt(max(0.0, 1.0 - distSq));
+    float z = sqrt(1.0 - distSq);
     vec3 normalLocal = normalize(vec3(v_uv, z));
 
     // Simple lighting in view-facing space
