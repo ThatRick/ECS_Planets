@@ -439,10 +439,7 @@ export default class App {
         // Load live Starlink orbital data and spawn satellites
         let created = 0
         try {
-            const starlinks = await fetchStarlinks()
-            const candidates = starlinks
-                .map((rec) => parseStarlinkOrbit(rec, MU_EARTH))
-                .filter((o): o is ParsedOrbit => !!o)
+            const candidates = await fetchStarlinkOrbits(MU_EARTH, MAX_SATELLITES)
 
             // Deterministic-ish shuffle so we don't bias toward any ordering
             shuffleInPlace(candidates)
@@ -661,6 +658,19 @@ type SpaceXStarlinkRecord = {
     spaceTrack?: Record<string, unknown> | null
 }
 
+type TleApiResponse = {
+    member?: TleApiTleRecord[]
+    view?: { next?: string }
+}
+
+type TleApiTleRecord = {
+    satelliteId?: number
+    name?: string
+    date?: string
+    line1?: string
+    line2?: string
+}
+
 type ParsedOrbit = {
     semiMajorAxis: number
     eccentricity: number
@@ -669,6 +679,61 @@ type ParsedOrbit = {
     inclinationRad: number
     raanRad: number
     argPeriapsisRad: number
+}
+
+async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+    try {
+        const orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
+        if (orbits.length > 0) return orbits
+    } catch (err) {
+        console.warn('TLE API fetch failed; falling back to SpaceX API.', err)
+    }
+
+    const starlinks = await fetchStarlinks()
+    return starlinks
+        .map((rec) => parseStarlinkOrbit(rec, muEarth))
+        .filter((o): o is ParsedOrbit => !!o)
+        .slice(0, max)
+}
+
+async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+    const pageSize = 100
+    const maxPages = 60 // safety bound
+
+    const seenIds = new Set<number>()
+    const results: ParsedOrbit[] = []
+
+    for (let page = 1; page <= maxPages && results.length < max; page++) {
+        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`
+        const res = await fetch(url)
+        if (!res.ok) {
+            throw new Error(`TLE API request failed: ${res.status} ${res.statusText}`)
+        }
+
+        const data = (await res.json()) as TleApiResponse
+        const member = Array.isArray(data.member) ? data.member : []
+        if (member.length === 0) break
+
+        for (const rec of member) {
+            const satId = typeof rec.satelliteId === 'number' ? rec.satelliteId : NaN
+            if (Number.isFinite(satId)) {
+                if (seenIds.has(satId)) continue
+                seenIds.add(satId)
+            }
+
+            const line1 = typeof rec.line1 === 'string' ? rec.line1 : ''
+            const line2 = typeof rec.line2 === 'string' ? rec.line2 : ''
+            const orbit = parseTleOrbit(line1, line2, muEarth)
+            if (!orbit) continue
+
+            results.push(orbit)
+            if (results.length >= max) break
+        }
+
+        if (!data.view?.next) break
+    }
+
+    return results
 }
 
 async function fetchStarlinks(): Promise<SpaceXStarlinkRecord[]> {
@@ -731,6 +796,79 @@ function parseStarlinkOrbit(rec: SpaceXStarlinkRecord, muEarth: number): ParsedO
         raanRad,
         argPeriapsisRad
     }
+}
+
+function parseTleOrbit(line1: string, line2: string, muEarth: number): ParsedOrbit | null {
+    // TLE line 1 epoch: columns 19-32 (1-based), format YYDDD.DDDDDDDD
+    if (line1.length < 32 || line2.length < 63) return null
+
+    const epochField = line1.substring(18, 32).trim()
+    const epochMs = parseTleEpochMs(epochField)
+
+    const inclinationDeg = toNumber(line2.substring(8, 16))
+    const raanDeg = toNumber(line2.substring(17, 25))
+    const eccentricity = parseFloat(`0.${line2.substring(26, 33).trim()}`)
+    const argPeriDeg = toNumber(line2.substring(34, 42))
+    const meanAnomalyDeg = toNumber(line2.substring(43, 51))
+    const meanMotionRevPerDay = toNumber(line2.substring(52, 63))
+
+    if (
+        !Number.isFinite(inclinationDeg) ||
+        !Number.isFinite(raanDeg) ||
+        !Number.isFinite(eccentricity) ||
+        !Number.isFinite(argPeriDeg) ||
+        !Number.isFinite(meanAnomalyDeg) ||
+        !Number.isFinite(meanMotionRevPerDay)
+    ) {
+        return null
+    }
+
+    const meanMotionRadPerSec = (meanMotionRevPerDay * Math.PI * 2) / 86400
+    if (!Number.isFinite(meanMotionRadPerSec) || meanMotionRadPerSec <= 0) return null
+
+    const semiMajorAxis = Math.cbrt(muEarth / (meanMotionRadPerSec * meanMotionRadPerSec))
+    if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0) return null
+
+    const dtSec = Number.isFinite(epochMs) ? (Date.now() - epochMs) / 1000 : 0
+
+    const inclinationRad = degToRad(inclinationDeg)
+    const raanRad = degToRad(raanDeg)
+    const argPeriapsisRad = degToRad(argPeriDeg)
+    const meanAnomaly0 = degToRad(meanAnomalyDeg)
+    const meanAnomaly = wrapAngleRad(meanAnomaly0 + meanMotionRadPerSec * dtSec)
+
+    return {
+        semiMajorAxis,
+        eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
+        meanMotionRadPerSec,
+        meanAnomaly,
+        inclinationRad,
+        raanRad,
+        argPeriapsisRad
+    }
+}
+
+function parseTleEpochMs(epoch: string): number {
+    // YYDDD.DDDDDDDD
+    if (epoch.length < 5) return NaN
+
+    const yy = parseInt(epoch.slice(0, 2), 10)
+    if (!Number.isFinite(yy)) return NaN
+    const year = yy < 57 ? 2000 + yy : 1900 + yy
+
+    const dayOfYear = parseFloat(epoch.slice(2))
+    if (!Number.isFinite(dayOfYear)) return NaN
+
+    const day = Math.floor(dayOfYear)
+    const dayFraction = dayOfYear - day
+
+    // UTC
+    const msAtYearStart = Date.UTC(year, 0, 1, 0, 0, 0, 0)
+    const ms = msAtYearStart
+        + (day - 1) * 86400 * 1000
+        + dayFraction * 86400 * 1000
+
+    return ms
 }
 
 function orbitToComponent(orbit: ParsedOrbit) {
