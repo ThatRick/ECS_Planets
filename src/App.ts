@@ -656,19 +656,38 @@ export default class App {
             playPauseBtn.addEventListener('click', () => this.togglePlayPause())
         }
 
-        // Time controls
+        // Time controls – step through a predefined sequence of logical values
+        const TIME_STEPS = [
+            0.1, 0.2, 0.5,
+            1, 2, 5, 10, 25, 50,
+            100, 250, 500,
+            1000, 2500, 5000, 10000,
+        ]
+
+        const stepTimeFactor = (direction: -1 | 1): void => {
+            const cur = this.world.timeFactor
+            if (direction === 1) {
+                const next = TIME_STEPS.find(v => v > cur)
+                if (next !== undefined) this.world.timeFactor = next
+            } else {
+                // find the last step that is smaller than current
+                for (let i = TIME_STEPS.length - 1; i >= 0; i--) {
+                    if (TIME_STEPS[i] < cur) {
+                        this.world.timeFactor = TIME_STEPS[i]
+                        return
+                    }
+                }
+            }
+        }
+
         const slowerBtn = document.getElementById('slowerButton')
         if (slowerBtn) {
-            slowerBtn.addEventListener('click', () => {
-                this.world.timeFactor *= 0.5
-            })
+            slowerBtn.addEventListener('click', () => stepTimeFactor(-1))
         }
 
         const fasterBtn = document.getElementById('fasterButton')
         if (fasterBtn) {
-            fasterBtn.addEventListener('click', () => {
-                this.world.timeFactor *= 2
-            })
+            fasterBtn.addEventListener('click', () => stepTimeFactor(1))
         }
 
         const nowBtn = document.getElementById('nowButton')

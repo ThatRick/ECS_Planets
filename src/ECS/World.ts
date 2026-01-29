@@ -79,10 +79,10 @@ export class World {
         this.ticker.timeFactor = factor
         const el = document.getElementById('timeFactor')
         if (el) {
-            // Format: show whole numbers without decimals, others with 1 decimal
-            el.textContent = factor >= 1 && Number.isInteger(factor)
+            // Format: whole numbers without decimals, others trimmed
+            el.textContent = Number.isInteger(factor)
                 ? String(factor)
-                : factor.toFixed(1)
+                : parseFloat(factor.toPrecision(2)).toString()
         }
     }
 

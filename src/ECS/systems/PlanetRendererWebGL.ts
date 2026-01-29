@@ -71,10 +71,10 @@ void main() {
     float distSq = dot(v_uv, v_uv);
     float dist = sqrt(distSq);
 
-    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
-    float aa = fwidth(dist);
+    // Analytic edge AA – clamp width so it never bleeds into quad corners
+    float aa = clamp(fwidth(dist), 0.0, 0.15);
     float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha <= 0.0) discard;
+    if (alpha < 0.005) discard;
 
     // Reconstruct a sphere normal from the projected disc (billboarded sphere)
     float z = sqrt(max(0.0, 1.0 - distSq));
@@ -126,10 +126,10 @@ void main() {
     float distSq = dot(v_uv, v_uv);
     float dist = sqrt(distSq);
 
-    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
-    float aa = fwidth(dist);
+    // Analytic edge AA – clamp width so it never bleeds into quad corners
+    float aa = clamp(fwidth(dist), 0.0, 0.15);
     float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
-    if (alpha <= 0.0) discard;
+    if (alpha < 0.005) discard;
 
     float z = sqrt(max(0.0, 1.0 - distSq));
     vec3 normalLocal = normalize(vec3(v_uv, z));
