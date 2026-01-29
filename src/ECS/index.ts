@@ -12,6 +12,7 @@ export {
     Temperature,
     Orbit,
     CameraComponent,
+    EarthTag,
     CameraData,
     OrbitData,
     ComponentTypes,

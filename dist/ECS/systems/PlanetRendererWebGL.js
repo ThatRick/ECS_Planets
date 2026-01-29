@@ -1,4 +1,4 @@
-import { Position, Size, Color, Temperature, CameraComponent } from '../Components.js';
+import { Position, Size, Color, Temperature, CameraComponent, EarthTag } from '../Components.js';
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -64,13 +64,13 @@ in float v_depth;
 out vec4 fragColor;
 
 void main() {
-    // Discard pixels outside unit circle
     float distSq = dot(v_uv, v_uv);
-    if (distSq > 1.0) discard;
     float dist = sqrt(distSq);
 
-    // Smooth edge anti-aliasing
-    float alpha = 1.0 - smoothstep(0.95, 1.0, dist);
+    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
+    float aa = fwidth(dist);
+    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
+    if (alpha <= 0.0) discard;
 
     // Reconstruct a sphere normal from the projected disc (billboarded sphere)
     float z = sqrt(max(0.0, 1.0 - distSq));
@@ -88,6 +88,96 @@ void main() {
     vec3 reflectDir = reflect(-lightDir, normal);
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
     col += spec * 0.15;
+
+    fragColor = vec4(col, alpha);
+}
+`;
+// Earth shader: parallels/meridians grid + optional user-location marker.
+const EARTH_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+in vec2 v_uv;
+in vec3 v_color;
+in float v_depth;
+
+uniform vec3 u_cameraRight;
+uniform vec3 u_cameraUp;
+uniform vec3 u_cameraForward;
+
+uniform vec3 u_userDirWorld;      // normalized
+uniform float u_hasUserLocation;  // 0 or 1
+
+out vec4 fragColor;
+
+float gridLine(float coord, float stepRad, float widthPx) {
+    float halfStep = stepRad * 0.5;
+    float d = abs(mod(coord + halfStep, stepRad) - halfStep);
+    float w = max(fwidth(coord) * widthPx, 1e-4);
+    return 1.0 - smoothstep(w, w * 1.5, d);
+}
+
+void main() {
+    float distSq = dot(v_uv, v_uv);
+    float dist = sqrt(distSq);
+
+    // Analytic 1px-ish edge AA (prevents thick "halo" on large bodies)
+    float aa = fwidth(dist);
+    float alpha = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dist);
+    if (alpha <= 0.0) discard;
+
+    float z = sqrt(max(0.0, 1.0 - distSq));
+    vec3 normalLocal = normalize(vec3(v_uv, z));
+
+    // Simple lighting in view-facing space
+    vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
+    float ambient = 0.28;
+    float diffuse = max(dot(normalLocal, lightDir), 0.0);
+    vec3 col = v_color * (ambient + diffuse * 0.72);
+
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    vec3 reflectDir = reflect(-lightDir, normalLocal);
+    float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
+    col += spec * 0.15;
+
+    // Map the visible hemisphere to world directions so the grid is anchored to world axes.
+    vec3 normalWorld = normalize(
+        u_cameraRight * normalLocal.x +
+        u_cameraUp * normalLocal.y +
+        u_cameraForward * normalLocal.z
+    );
+
+    float lat = asin(clamp(normalWorld.y, -1.0, 1.0));
+    float lon = atan(normalWorld.z, normalWorld.x);
+
+    float latStep = radians(15.0);
+    float lonStep = radians(15.0);
+    float gridPx = 1.25;
+
+    float grid = max(
+        gridLine(lat, latStep, gridPx),
+        gridLine(lon, lonStep, gridPx)
+    );
+
+    // Slightly emphasize equator and prime meridian
+    float latW = max(fwidth(lat) * gridPx, 1e-4);
+    float lonW = max(fwidth(lon) * gridPx, 1e-4);
+    float eq = 1.0 - smoothstep(latW, latW * 1.5, abs(lat));
+    float pm = 1.0 - smoothstep(lonW, lonW * 1.5, abs(lon));
+    grid = max(grid, max(eq, pm) * 0.6);
+
+    col = mix(col, vec3(0.95, 0.95, 1.0), grid * 0.35);
+
+    // User location marker (red with a thin white ring)
+    if (u_hasUserLocation > 0.5) {
+        float markerDot = dot(normalWorld, u_userDirWorld);
+        float mAA = max(fwidth(markerDot), 1e-4);
+        float outer = smoothstep(1.0 - mAA * 16.0, 1.0, markerDot);
+        float inner = smoothstep(1.0 - mAA * 10.0, 1.0, markerDot);
+        float ring = max(0.0, outer - inner);
+
+        col = mix(col, vec3(1.0), ring);
+        col = mix(col, vec3(1.0, 0.2, 0.15), inner);
+    }
 
     fragColor = vec4(col, alpha);
 }
@@ -113,33 +203,55 @@ export function createPlanetRendererWebGL(canvas) {
     }
     // Compile shaders
     const vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
-    const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
-    // Link program
-    const program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-        throw new Error('Shader program link failed: ' + gl.getProgramInfoLog(program));
+    const bodyFragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+    const earthFragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, EARTH_FRAGMENT_SHADER);
+    // Link programs
+    const bodyProgram = gl.createProgram();
+    gl.attachShader(bodyProgram, vertexShader);
+    gl.attachShader(bodyProgram, bodyFragmentShader);
+    gl.linkProgram(bodyProgram);
+    if (!gl.getProgramParameter(bodyProgram, gl.LINK_STATUS)) {
+        throw new Error('Shader program link failed (body): ' + gl.getProgramInfoLog(bodyProgram));
+    }
+    const earthProgram = gl.createProgram();
+    gl.attachShader(earthProgram, vertexShader);
+    gl.attachShader(earthProgram, earthFragmentShader);
+    gl.linkProgram(earthProgram);
+    if (!gl.getProgramParameter(earthProgram, gl.LINK_STATUS)) {
+        throw new Error('Shader program link failed (earth): ' + gl.getProgramInfoLog(earthProgram));
     }
     // Get attribute and uniform locations
-    const attribs = {
-        vertex: gl.getAttribLocation(program, 'a_vertex'),
-        position: gl.getAttribLocation(program, 'a_position'),
-        size: gl.getAttribLocation(program, 'a_size'),
-        color: gl.getAttribLocation(program, 'a_color')
+    const bodyAttribs = {
+        vertex: gl.getAttribLocation(bodyProgram, 'a_vertex'),
+        position: gl.getAttribLocation(bodyProgram, 'a_position'),
+        size: gl.getAttribLocation(bodyProgram, 'a_size'),
+        color: gl.getAttribLocation(bodyProgram, 'a_color')
     };
-    const uniforms = {
-        resolution: gl.getUniformLocation(program, 'u_resolution'),
-        viewMatrix: gl.getUniformLocation(program, 'u_viewMatrix'),
-        projMatrix: gl.getUniformLocation(program, 'u_projMatrix'),
-        cameraRight: gl.getUniformLocation(program, 'u_cameraRight'),
-        cameraUp: gl.getUniformLocation(program, 'u_cameraUp'),
-        minPixelSize: gl.getUniformLocation(program, 'u_minPixelSize')
+    const bodyUniforms = {
+        resolution: gl.getUniformLocation(bodyProgram, 'u_resolution'),
+        viewMatrix: gl.getUniformLocation(bodyProgram, 'u_viewMatrix'),
+        projMatrix: gl.getUniformLocation(bodyProgram, 'u_projMatrix'),
+        cameraRight: gl.getUniformLocation(bodyProgram, 'u_cameraRight'),
+        cameraUp: gl.getUniformLocation(bodyProgram, 'u_cameraUp'),
+        minPixelSize: gl.getUniformLocation(bodyProgram, 'u_minPixelSize')
     };
-    // Create VAO
-    const vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
+    const earthAttribs = {
+        vertex: gl.getAttribLocation(earthProgram, 'a_vertex'),
+        position: gl.getAttribLocation(earthProgram, 'a_position'),
+        size: gl.getAttribLocation(earthProgram, 'a_size'),
+        color: gl.getAttribLocation(earthProgram, 'a_color')
+    };
+    const earthUniforms = {
+        resolution: gl.getUniformLocation(earthProgram, 'u_resolution'),
+        viewMatrix: gl.getUniformLocation(earthProgram, 'u_viewMatrix'),
+        projMatrix: gl.getUniformLocation(earthProgram, 'u_projMatrix'),
+        cameraRight: gl.getUniformLocation(earthProgram, 'u_cameraRight'),
+        cameraUp: gl.getUniformLocation(earthProgram, 'u_cameraUp'),
+        cameraForward: gl.getUniformLocation(earthProgram, 'u_cameraForward'),
+        minPixelSize: gl.getUniformLocation(earthProgram, 'u_minPixelSize'),
+        userDirWorld: gl.getUniformLocation(earthProgram, 'u_userDirWorld'),
+        hasUserLocation: gl.getUniformLocation(earthProgram, 'u_hasUserLocation')
+    };
     // Create unit quad geometry (two triangles forming a square from -1 to 1)
     const quadVertices = new Float32Array([
         -1, -1, // bottom-left
@@ -152,25 +264,44 @@ export function createPlanetRendererWebGL(canvas) {
     const quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(attribs.vertex);
-    gl.vertexAttribPointer(attribs.vertex, 2, gl.FLOAT, false, 0, 0);
+    // Create VAOs (attribute locations can differ per program)
+    const vaoBody = gl.createVertexArray();
+    gl.bindVertexArray(vaoBody);
+    gl.enableVertexAttribArray(bodyAttribs.vertex);
+    gl.vertexAttribPointer(bodyAttribs.vertex, 2, gl.FLOAT, false, 0, 0);
     // Create instance buffer (position xyz, size, temperature per instance)
     const instanceBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, MAX_INSTANCES * INSTANCE_STRIDE * 4, gl.DYNAMIC_DRAW);
     // Set up instance attributes with divisor = 1 (per-instance)
     // a_position (vec3): offset 0
-    gl.enableVertexAttribArray(attribs.position);
-    gl.vertexAttribPointer(attribs.position, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 0);
-    gl.vertexAttribDivisor(attribs.position, 1);
+    gl.enableVertexAttribArray(bodyAttribs.position);
+    gl.vertexAttribPointer(bodyAttribs.position, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 0);
+    gl.vertexAttribDivisor(bodyAttribs.position, 1);
     // a_size (float): offset 12
-    gl.enableVertexAttribArray(attribs.size);
-    gl.vertexAttribPointer(attribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
-    gl.vertexAttribDivisor(attribs.size, 1);
+    gl.enableVertexAttribArray(bodyAttribs.size);
+    gl.vertexAttribPointer(bodyAttribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
+    gl.vertexAttribDivisor(bodyAttribs.size, 1);
     // a_color (vec3): offset 16
-    gl.enableVertexAttribArray(attribs.color);
-    gl.vertexAttribPointer(attribs.color, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
-    gl.vertexAttribDivisor(attribs.color, 1);
+    gl.enableVertexAttribArray(bodyAttribs.color);
+    gl.vertexAttribPointer(bodyAttribs.color, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
+    gl.vertexAttribDivisor(bodyAttribs.color, 1);
+    gl.bindVertexArray(null);
+    const vaoEarth = gl.createVertexArray();
+    gl.bindVertexArray(vaoEarth);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+    gl.enableVertexAttribArray(earthAttribs.vertex);
+    gl.vertexAttribPointer(earthAttribs.vertex, 2, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+    gl.enableVertexAttribArray(earthAttribs.position);
+    gl.vertexAttribPointer(earthAttribs.position, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 0);
+    gl.vertexAttribDivisor(earthAttribs.position, 1);
+    gl.enableVertexAttribArray(earthAttribs.size);
+    gl.vertexAttribPointer(earthAttribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
+    gl.vertexAttribDivisor(earthAttribs.size, 1);
+    gl.enableVertexAttribArray(earthAttribs.color);
+    gl.vertexAttribPointer(earthAttribs.color, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
+    gl.vertexAttribDivisor(earthAttribs.color, 1);
     gl.bindVertexArray(null);
     // Pre-allocate instance data buffer on CPU side
     const instanceData = new Float32Array(MAX_INSTANCES * INSTANCE_STRIDE);
@@ -184,6 +315,30 @@ export function createPlanetRendererWebGL(canvas) {
     // Enable depth testing for proper 3D ordering
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
+    // Optional user-location marker (requested only when an Earth-tagged body exists)
+    let userLocationRequested = false;
+    let hasUserLocation = 0;
+    const userDirWorld = new Float32Array([0, 0, 0]);
+    const requestUserLocation = () => {
+        if (userLocationRequested)
+            return;
+        userLocationRequested = true;
+        if (typeof navigator === 'undefined')
+            return;
+        if (!('geolocation' in navigator))
+            return;
+        navigator.geolocation.getCurrentPosition((pos) => {
+            const latRad = (pos.coords.latitude * Math.PI) / 180;
+            const lonRad = (pos.coords.longitude * Math.PI) / 180;
+            const cosLat = Math.cos(latRad);
+            userDirWorld[0] = cosLat * Math.cos(lonRad);
+            userDirWorld[1] = Math.sin(latRad);
+            userDirWorld[2] = cosLat * Math.sin(lonRad);
+            hasUserLocation = 1;
+        }, (err) => {
+            console.warn('User location unavailable:', err);
+        }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 10_000 });
+    };
     return {
         name: 'PlanetRendererWebGL',
         phase: 'visual',
@@ -271,10 +426,126 @@ export function createPlanetRendererWebGL(canvas) {
             // Get renderable planets
             const bodies = world.query(Position, Size);
             const bodyCount = Math.min(bodies.length, MAX_INSTANCES);
-            // Build instance data buffer
+            // Clear screen and depth buffer
+            gl.clearColor(0, 0, 0, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            const earthEntities = world.query(Position, Size, EarthTag);
+            const earthCount = Math.min(earthEntities.length, MAX_INSTANCES);
+            const minPixelSize = 1.0;
+            // If an Earth-tagged body exists, render it last with the Earth shader (grid + marker),
+            // so satellites fade cleanly at the horizon (no black alpha-edge halo).
+            if (earthCount > 0) {
+                // Draw non-Earth bodies first
+                let offset = 0;
+                for (let i = 0; i < bodyCount; i++) {
+                    const id = bodies[i];
+                    if (world.hasComponent(id, EarthTag))
+                        continue;
+                    const pos = world.getComponent(id, Position);
+                    const size = world.getComponent(id, Size);
+                    const color = world.getComponent(id, Color);
+                    const temp = world.getComponent(id, Temperature);
+                    let r = 1, g = 1, b = 1;
+                    if (color) {
+                        r = color.x;
+                        g = color.y;
+                        b = color.z;
+                    }
+                    else if (temp !== undefined) {
+                        temperatureToRGB(temp, tmpRgb);
+                        r = tmpRgb[0];
+                        g = tmpRgb[1];
+                        b = tmpRgb[2];
+                    }
+                    instanceData[offset++] = pos.x;
+                    instanceData[offset++] = pos.y;
+                    instanceData[offset++] = pos.z;
+                    instanceData[offset++] = size;
+                    instanceData[offset++] = r;
+                    instanceData[offset++] = g;
+                    instanceData[offset++] = b;
+                }
+                const nonEarthCount = offset / INSTANCE_STRIDE;
+                if (nonEarthCount > 0) {
+                    gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+                    gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, offset));
+                    gl.useProgram(bodyProgram);
+                    gl.bindVertexArray(vaoBody);
+                    gl.uniform2f(bodyUniforms.resolution, width, height);
+                    gl.uniformMatrix4fv(bodyUniforms.viewMatrix, false, viewMatrix);
+                    gl.uniformMatrix4fv(bodyUniforms.projMatrix, false, projMatrix);
+                    gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
+                    gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+                    gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonEarthCount);
+                }
+                // Draw Earth-tagged bodies last (grid + user marker)
+                requestUserLocation();
+                offset = 0;
+                for (let i = 0; i < earthCount; i++) {
+                    const id = earthEntities[i];
+                    const pos = world.getComponent(id, Position);
+                    const size = world.getComponent(id, Size);
+                    const color = world.getComponent(id, Color);
+                    const temp = world.getComponent(id, Temperature);
+                    let r = 1, g = 1, b = 1;
+                    if (color) {
+                        r = color.x;
+                        g = color.y;
+                        b = color.z;
+                    }
+                    else if (temp !== undefined) {
+                        temperatureToRGB(temp, tmpRgb);
+                        r = tmpRgb[0];
+                        g = tmpRgb[1];
+                        b = tmpRgb[2];
+                    }
+                    instanceData[offset++] = pos.x;
+                    instanceData[offset++] = pos.y;
+                    instanceData[offset++] = pos.z;
+                    instanceData[offset++] = size;
+                    instanceData[offset++] = r;
+                    instanceData[offset++] = g;
+                    instanceData[offset++] = b;
+                }
+                gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, offset));
+                gl.useProgram(earthProgram);
+                gl.bindVertexArray(vaoEarth);
+                gl.uniform2f(earthUniforms.resolution, width, height);
+                gl.uniformMatrix4fv(earthUniforms.viewMatrix, false, viewMatrix);
+                gl.uniformMatrix4fv(earthUniforms.projMatrix, false, projMatrix);
+                gl.uniform3f(earthUniforms.cameraRight, rightX, rightY, rightZ);
+                gl.uniform3f(earthUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+                gl.uniform3f(earthUniforms.cameraForward, -fwdX, -fwdY, -fwdZ);
+                gl.uniform1f(earthUniforms.minPixelSize, minPixelSize);
+                gl.uniform3f(earthUniforms.userDirWorld, userDirWorld[0], userDirWorld[1], userDirWorld[2]);
+                gl.uniform1f(earthUniforms.hasUserLocation, hasUserLocation);
+                gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, earthCount);
+                gl.bindVertexArray(null);
+                return;
+            }
+            // No Earth-tagged body: draw the largest body last to reduce alpha-edge halos.
+            if (bodyCount === 0) {
+                gl.bindVertexArray(null);
+                return;
+            }
+            let largestId = undefined;
+            let largestSize = -Infinity;
+            for (let i = 0; i < bodyCount; i++) {
+                const id = bodies[i];
+                const size = world.getComponent(id, Size);
+                if (size > largestSize) {
+                    largestSize = size;
+                    largestId = id;
+                }
+            }
+            // Build instance data for non-largest bodies
             let offset = 0;
             for (let i = 0; i < bodyCount; i++) {
                 const id = bodies[i];
+                if (id === largestId)
+                    continue;
                 const pos = world.getComponent(id, Position);
                 const size = world.getComponent(id, Size);
                 const color = world.getComponent(id, Color);
@@ -299,24 +570,56 @@ export function createPlanetRendererWebGL(canvas) {
                 instanceData[offset++] = g;
                 instanceData[offset++] = b;
             }
-            // Upload instance data to GPU
-            gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
-            gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, offset));
-            // Clear screen and depth buffer
-            gl.clearColor(0, 0, 0, 1);
-            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-            // Set up shader program
-            gl.useProgram(program);
-            gl.bindVertexArray(vao);
-            // Set uniforms
-            gl.uniform2f(uniforms.resolution, width, height);
-            gl.uniformMatrix4fv(uniforms.viewMatrix, false, viewMatrix);
-            gl.uniformMatrix4fv(uniforms.projMatrix, false, projMatrix);
-            gl.uniform3f(uniforms.cameraRight, rightX, rightY, rightZ);
-            gl.uniform3f(uniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
-            gl.uniform1f(uniforms.minPixelSize, 1.0); // Minimum 1 pixel size
-            // Draw all instances with a single draw call
-            gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, bodyCount);
+            const nonLargestCount = offset / INSTANCE_STRIDE;
+            if (nonLargestCount > 0) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, offset));
+                gl.useProgram(bodyProgram);
+                gl.bindVertexArray(vaoBody);
+                gl.uniform2f(bodyUniforms.resolution, width, height);
+                gl.uniformMatrix4fv(bodyUniforms.viewMatrix, false, viewMatrix);
+                gl.uniformMatrix4fv(bodyUniforms.projMatrix, false, projMatrix);
+                gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
+                gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+                gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonLargestCount);
+            }
+            if (largestId !== undefined) {
+                const pos = world.getComponent(largestId, Position);
+                const size = world.getComponent(largestId, Size);
+                const color = world.getComponent(largestId, Color);
+                const temp = world.getComponent(largestId, Temperature);
+                let r = 1, g = 1, b = 1;
+                if (color) {
+                    r = color.x;
+                    g = color.y;
+                    b = color.z;
+                }
+                else if (temp !== undefined) {
+                    temperatureToRGB(temp, tmpRgb);
+                    r = tmpRgb[0];
+                    g = tmpRgb[1];
+                    b = tmpRgb[2];
+                }
+                instanceData[0] = pos.x;
+                instanceData[1] = pos.y;
+                instanceData[2] = pos.z;
+                instanceData[3] = size;
+                instanceData[4] = r;
+                instanceData[5] = g;
+                instanceData[6] = b;
+                gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+                gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, INSTANCE_STRIDE));
+                gl.useProgram(bodyProgram);
+                gl.bindVertexArray(vaoBody);
+                gl.uniform2f(bodyUniforms.resolution, width, height);
+                gl.uniformMatrix4fv(bodyUniforms.viewMatrix, false, viewMatrix);
+                gl.uniformMatrix4fv(bodyUniforms.projMatrix, false, projMatrix);
+                gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
+                gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+                gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1);
+            }
             gl.bindVertexArray(null);
         }
     };

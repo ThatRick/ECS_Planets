@@ -2,7 +2,7 @@
 export { World } from './World.js';
 export { createSystem } from './System.js';
 // Components
-export { Position, Velocity, Mass, Size, Color, Temperature, Orbit, CameraComponent } from './Components.js';
+export { Position, Velocity, Mass, Size, Color, Temperature, Orbit, CameraComponent, EarthTag } from './Components.js';
 // Utilities
 export { SpatialHash } from './SpatialHash.js';
 export { PhysicsConfig } from './PhysicsConfig.js';

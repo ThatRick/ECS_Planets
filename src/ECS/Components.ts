@@ -9,6 +9,7 @@ export const Color = Symbol('Color')
 export const Temperature = Symbol('Temperature')
 export const Orbit = Symbol('Orbit')
 export const CameraComponent = Symbol('Camera')
+export const EarthTag = Symbol('EarthTag')
 
 // Component data types for 3D camera with spherical coordinates
 export interface CameraData {
@@ -49,6 +50,7 @@ export interface ComponentTypes {
     [Temperature]: number
     [Orbit]: OrbitData
     [CameraComponent]: CameraData
+    [EarthTag]: true
 }
 
 // Helper type for component keys
@@ -63,5 +65,6 @@ export const ALL_COMPONENTS: symbol[] = [
     Color,
     Temperature,
     Orbit,
-    CameraComponent
+    CameraComponent,
+    EarthTag
 ]

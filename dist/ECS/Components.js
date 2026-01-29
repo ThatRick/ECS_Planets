@@ -7,6 +7,7 @@ export const Color = Symbol('Color');
 export const Temperature = Symbol('Temperature');
 export const Orbit = Symbol('Orbit');
 export const CameraComponent = Symbol('Camera');
+export const EarthTag = Symbol('EarthTag');
 // All component symbols for iteration
 export const ALL_COMPONENTS = [
     Position,
@@ -16,5 +17,6 @@ export const ALL_COMPONENTS = [
     Color,
     Temperature,
     Orbit,
-    CameraComponent
+    CameraComponent,
+    EarthTag
 ];

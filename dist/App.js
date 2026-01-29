@@ -1,5 +1,6 @@
 import Vec3 from './lib/Vector3.js';
-import { World, Position, Velocity, Mass, Size, Color, Temperature, Orbit, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, OrbitSystem, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
+import { getStarlinkOrbitStatusCode } from './data/starlinkStatus.js';
+import { World, Position, Velocity, Mass, Size, Color, Temperature, EarthTag, Orbit, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, OrbitSystem, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues, setGravityAlgoValue } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
@@ -343,6 +344,7 @@ export default class App {
         world.addComponent(earth, Size, EARTH_RADIUS_M);
         world.addComponent(earth, Color, new Vec3(0.12, 0.35, 0.95));
         world.addComponent(earth, Temperature, 300);
+        world.addComponent(earth, EarthTag, true);
         // Load live Starlink orbital data and spawn satellites
         let created = 0;
         try {
@@ -364,7 +366,7 @@ export default class App {
                 const pos = new Vec3(0, 0, 0);
                 world.addComponent(entity, Position, pos);
                 world.addComponent(entity, Size, SAT_SIZE_M);
-                world.addComponent(entity, Color, new Vec3(1, 1, 1));
+                world.addComponent(entity, Color, starlinkStatusToColor(getStarlinkOrbitStatusCode(orbit.noradId)));
                 world.addComponent(entity, Temperature, 1000);
                 const orbitComp = orbitToComponent(orbit);
                 setOrbitTimeMs(orbitComp, world.simTimeMs);
@@ -389,6 +391,7 @@ export default class App {
                 const raan = Math.random() * Math.PI * 2;
                 const argPeri = Math.random() * Math.PI * 2;
                 const orbit = orbitToComponent({
+                    noradId: 0,
                     semiMajorAxis: a,
                     eccentricity: e,
                     meanMotionRadPerSec,
@@ -584,17 +587,14 @@ async function fetchStarlinkOrbitsFromTleApi(muEarth, max) {
         if (member.length === 0)
             break;
         for (const rec of member) {
-            const satId = typeof rec.satelliteId === 'number' ? rec.satelliteId : NaN;
-            if (Number.isFinite(satId)) {
-                if (seenIds.has(satId))
-                    continue;
-                seenIds.add(satId);
-            }
             const line1 = typeof rec.line1 === 'string' ? rec.line1 : '';
             const line2 = typeof rec.line2 === 'string' ? rec.line2 : '';
             const orbit = parseTleOrbit(line1, line2, muEarth);
             if (!orbit)
                 continue;
+            if (seenIds.has(orbit.noradId))
+                continue;
+            seenIds.add(orbit.noradId);
             results.push(orbit);
             if (results.length >= max)
                 break;
@@ -619,6 +619,7 @@ function parseStarlinkOrbit(rec, muEarth) {
     const decay = st['DECAY_DATE'];
     if (typeof decay === 'string' && decay.length > 0)
         return null;
+    const noradId = toNumber(st['NORAD_CAT_ID']);
     const epochRaw = st['EPOCH'];
     const meanMotionRevPerDay = toNumber(st['MEAN_MOTION']);
     const eccentricity = toNumber(st['ECCENTRICITY']);
@@ -634,6 +635,8 @@ function parseStarlinkOrbit(rec, muEarth) {
         !Number.isFinite(meanAnomalyDeg)) {
         return null;
     }
+    if (!Number.isFinite(noradId) || noradId <= 0)
+        return null;
     const meanMotionRadPerSec = (meanMotionRevPerDay * Math.PI * 2) / 86400;
     if (!Number.isFinite(meanMotionRadPerSec) || meanMotionRadPerSec <= 0)
         return null;
@@ -649,6 +652,7 @@ function parseStarlinkOrbit(rec, muEarth) {
     const argPeriapsisRad = degToRad(argPeriDeg);
     const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg));
     return {
+        noradId,
         semiMajorAxis,
         eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
         meanMotionRadPerSec,
@@ -662,6 +666,10 @@ function parseStarlinkOrbit(rec, muEarth) {
 function parseTleOrbit(line1, line2, muEarth) {
     // TLE line 1 epoch: columns 19-32 (1-based), format YYDDD.DDDDDDDD
     if (line1.length < 32 || line2.length < 63)
+        return null;
+    const noradMatch = line1.match(/^1\\s+(\\d{1,6})/);
+    const noradId = noradMatch ? parseInt(noradMatch[1], 10) : NaN;
+    if (!Number.isFinite(noradId) || noradId <= 0)
         return null;
     const epochField = line1.substring(18, 32).trim();
     const epochMs = parseTleEpochMs(epochField);
@@ -692,6 +700,7 @@ function parseTleOrbit(line1, line2, muEarth) {
     const argPeriapsisRad = degToRad(argPeriDeg);
     const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg));
     return {
+        noradId,
         semiMajorAxis,
         eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
         meanMotionRadPerSec,
@@ -788,6 +797,27 @@ function solveKeplerE(M, e) {
         E -= f / fp;
     }
     return E;
+}
+const STARLINK_STATUS_COLORS = {
+    // Working / in-service-ish
+    O: new Vec3(0.25, 0.95, 0.35), // operational shell
+    A: new Vec3(0.25, 0.75, 1.0), // ascent
+    D: new Vec3(0.35, 0.45, 1.0), // drift
+    T: new Vec3(0.7, 0.45, 1.0), // reserve / relocating
+    S: new Vec3(1.0, 0.45, 0.9), // special
+    // Maneuvering / out-of-constellation
+    L: new Vec3(1.0, 0.95, 0.25), // lowered
+    R: new Vec3(1.0, 0.65, 0.25), // retiring / disposal underway
+    U: new Vec3(1.0, 0.35, 0.25), // anomalous
+    // Failed / decaying / down
+    F: new Vec3(1.0, 0.15, 0.15), // screened / early deorbit
+    M: new Vec3(0.75, 0.15, 0.15), // dead / uncontrolled decay
+    f: new Vec3(0.6, 0.6, 0.6), // failed to orbit
+    G: new Vec3(0.5, 0.5, 0.5), // graveyard
+    unknown: new Vec3(0.85, 0.85, 0.85)
+};
+function starlinkStatusToColor(code) {
+    return STARLINK_STATUS_COLORS[code ?? 'unknown'] ?? STARLINK_STATUS_COLORS.unknown;
 }
 function formatUtcTimeMs(ms) {
     if (!Number.isFinite(ms))
