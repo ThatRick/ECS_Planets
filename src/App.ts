@@ -56,6 +56,7 @@ export default class App {
     private playPauseBtn: HTMLElement | null
     private sharedCameraSystem: System
     private sharedRendererSystem: System | null = null
+    private legendEl: HTMLElement | null = null
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
@@ -80,6 +81,10 @@ export default class App {
             (gravityType) => this.switchGravitySystem(gravityType)
         )
         document.body.appendChild(settingsPanel)
+
+        // Add satellite status legend (hidden by default)
+        this.legendEl = this.createStarlinkLegend()
+        document.body.appendChild(this.legendEl)
 
         // Set up responsive canvas
         this.resizeCanvas()
@@ -310,6 +315,39 @@ export default class App {
         const isStarlinks = this.currentScene === 'starlinks'
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks)
         this.nowBtn?.classList.toggle('hidden', !isStarlinks)
+        this.legendEl?.classList.toggle('hidden', !isStarlinks)
+    }
+
+    private createStarlinkLegend(): HTMLElement {
+        const legend = document.createElement('div')
+        legend.id = 'starlink-legend'
+        legend.className = 'hidden'
+
+        const entries: [string, string, Vec3][] = [
+            ['O', 'Operational', STARLINK_STATUS_COLORS.O],
+            ['A', 'Ascent', STARLINK_STATUS_COLORS.A],
+            ['D', 'Drift', STARLINK_STATUS_COLORS.D],
+            ['T', 'Reserve', STARLINK_STATUS_COLORS.T],
+            ['S', 'Special', STARLINK_STATUS_COLORS.S],
+            ['L', 'Lowered', STARLINK_STATUS_COLORS.L],
+            ['R', 'Retiring', STARLINK_STATUS_COLORS.R],
+            ['U', 'Anomalous', STARLINK_STATUS_COLORS.U],
+            ['F', 'Deorbit', STARLINK_STATUS_COLORS.F],
+            ['M', 'Dead', STARLINK_STATUS_COLORS.M],
+            ['f', 'Failed orbit', STARLINK_STATUS_COLORS.f],
+            ['G', 'Graveyard', STARLINK_STATUS_COLORS.G],
+        ]
+
+        let html = '<div class="legend-title">Satellite Status</div>'
+        for (const [, label, color] of entries) {
+            const r = Math.round(color.x * 255)
+            const g = Math.round(color.y * 255)
+            const b = Math.round(color.z * 255)
+            html += `<div class="legend-entry"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</div>`
+        }
+
+        legend.innerHTML = html
+        return legend
     }
 
     private updateStarlinksTimeUi(): void {

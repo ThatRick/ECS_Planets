@@ -93,7 +93,8 @@ void main() {
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
     col += spec * 0.15;
 
-    fragColor = vec4(col, alpha);
+    // Premultiplied alpha to avoid dark fringe at edges
+    fragColor = vec4(col * alpha, alpha);
 }
 `
 
@@ -174,17 +175,24 @@ void main() {
 
     // User location marker (red with a thin white ring)
     if (u_hasUserLocation > 0.5) {
+        // Angular distance from user location (0 = exactly there, grows with distance)
         float markerDot = dot(normalWorld, u_userDirWorld);
-        float mAA = max(fwidth(markerDot), 1e-4);
-        float outer = smoothstep(1.0 - mAA * 16.0, 1.0, markerDot);
-        float inner = smoothstep(1.0 - mAA * 10.0, 1.0, markerDot);
+        float angDist = acos(clamp(markerDot, -1.0, 1.0));
+        float aaAng = max(fwidth(angDist), 1e-5);
+
+        // Fixed angular radius (~3 degrees outer, ~2 degrees inner)
+        float outerR = 0.052;
+        float innerR = 0.035;
+        float outer = 1.0 - smoothstep(outerR - aaAng, outerR + aaAng, angDist);
+        float inner = 1.0 - smoothstep(innerR - aaAng, innerR + aaAng, angDist);
         float ring = max(0.0, outer - inner);
 
         col = mix(col, vec3(1.0), ring);
         col = mix(col, vec3(1.0, 0.2, 0.15), inner);
     }
 
-    fragColor = vec4(col, alpha);
+    // Premultiplied alpha to avoid dark fringe at edges
+    fragColor = vec4(col * alpha, alpha);
 }
 `
 
@@ -345,9 +353,9 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): System {
     const viewMatrix = new Float32Array(16)
     const projMatrix = new Float32Array(16)
 
-    // Enable blending for anti-aliased edges
+    // Enable blending for anti-aliased edges (premultiplied alpha)
     gl.enable(gl.BLEND)
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 
     // Enable depth testing for proper 3D ordering
     gl.enable(gl.DEPTH_TEST)
