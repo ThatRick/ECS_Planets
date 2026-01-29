@@ -8,9 +8,12 @@ export {
     Velocity,
     Mass,
     Size,
+    Color,
     Temperature,
+    Orbit,
     CameraComponent,
     CameraData,
+    OrbitData,
     ComponentTypes,
     ComponentKey
 } from './Components.js'
@@ -24,6 +27,7 @@ export { QuadTree, Body } from './QuadTree.js'
 export {
     GravitySystemSimple,
     GravitySystemBarnesHut,
+    OrbitSystem,
     createCameraMovementSystem,
     createPlanetRenderer,
     createPlanetRendererWebGL,

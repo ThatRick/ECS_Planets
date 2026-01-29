@@ -1,6 +1,6 @@
 import { System } from '../System.js'
 import { World } from '../World.js'
-import { Position, Size, Temperature, CameraComponent } from '../Components.js'
+import { Position, Size, Color, Temperature, CameraComponent } from '../Components.js'
 import { color, scale } from '../../lib/common.js'
 
 /**
@@ -24,7 +24,7 @@ export function createPlanetRenderer(canvas: HTMLCanvasElement): System {
             const camera = world.getComponent(cameraEntity, CameraComponent)!
 
             // Get renderable planets
-            const planets = world.query(Position, Size, Temperature)
+            const bodies = world.query(Position, Size)
 
             // Clear canvas
             ctx.save()
@@ -54,10 +54,11 @@ export function createPlanetRenderer(canvas: HTMLCanvasElement): System {
             const centerY = height / 2
 
             // Render each planet
-            for (const id of planets) {
+            for (const id of bodies) {
                 const pos = world.getComponent(id, Position)!
                 const size = world.getComponent(id, Size)!
-                const temp = world.getComponent(id, Temperature)!
+                const explicitColor = world.getComponent(id, Color)
+                const temp = world.getComponent(id, Temperature)
 
                 // Project 3D position to 2D screen coordinates
                 const screenX = centerX + (pos.x * rightX + pos.z * rightZ) * scaleFactor
@@ -69,7 +70,13 @@ export function createPlanetRenderer(canvas: HTMLCanvasElement): System {
 
                 ctx.beginPath()
                 ctx.arc(screenX, screenY, Math.max(screenSize, 1), 0, Math.PI * 2)
-                ctx.fillStyle = bodyColor(temp)
+                if (explicitColor) {
+                    ctx.fillStyle = color(explicitColor.x * 255, explicitColor.y * 255, explicitColor.z * 255)
+                } else if (temp !== undefined) {
+                    ctx.fillStyle = bodyColor(temp)
+                } else {
+                    ctx.fillStyle = '#fff'
+                }
                 ctx.fill()
             }
 

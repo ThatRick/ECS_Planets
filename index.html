@@ -97,6 +97,31 @@
             min-width: 38px;
         }
 
+        select.scene-select {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            background: #333;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23bbb' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px;
+        }
+
+        select.scene-select:hover {
+            background-color: #444;
+        }
+
+        select.scene-select:disabled {
+            opacity: 0.6;
+            cursor: default;
+        }
+
         .time-controls {
             display: flex;
             align-items: center;
@@ -254,8 +279,17 @@
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
             <button id="perfBtn" class="icon-btn" title="Performance stats">&#9776;</button>
+            <select id="sceneSelect" class="scene-select" title="Scene">
+                <option value="proto-planets">Proto planets</option>
+                <option value="starlinks">Starlinks</option>
+            </select>
+            <button id="loadSceneBtn" title="Load selected scene">Load</button>
             <span class="spacer"></span>
             <div class="status-bar">
+                <div class="status-item">
+                    <span>Scene:</span>
+                    <span id="sceneName" class="status-value">Proto planets</span>
+                </div>
                 <div class="status-item">
                     <span>Bodies:</span>
                     <span id="bodyCount" class="status-value">0</span>
