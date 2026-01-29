@@ -42,6 +42,9 @@ export default class App {
     private sceneNameEl: HTMLElement | null
     private sceneSelectEl: HTMLSelectElement | null
     private loadSceneBtn: HTMLButtonElement | null
+    private simTimeStatusEl: HTMLElement | null
+    private simTimeEl: HTMLElement | null
+    private nowBtn: HTMLButtonElement | null
     private perfMonitor: PerfMonitor
     private currentGravityType: GravityType = 'barnes-hut'
     private currentRenderer: RendererType = 'canvas'
@@ -57,6 +60,9 @@ export default class App {
         this.sceneNameEl = document.getElementById('sceneName')
         this.sceneSelectEl = document.getElementById('sceneSelect') as HTMLSelectElement | null
         this.loadSceneBtn = document.getElementById('loadSceneBtn') as HTMLButtonElement | null
+        this.simTimeStatusEl = document.getElementById('simTimeStatus')
+        this.simTimeEl = document.getElementById('simTimeDisplay')
+        this.nowBtn = document.getElementById('nowButton') as HTMLButtonElement | null
         this.playPauseBtn = document.getElementById('playPauseBtn')
         this.perfMonitor = new PerfMonitor()
 
@@ -101,6 +107,7 @@ export default class App {
         this.setSettingsEnabled(true)
         this.perfMonitor.reset()
         this.bindControls()
+        this.updateStarlinksTimeUiVisibility()
 
         // Main render loop
         const loop = () => {
@@ -296,6 +303,25 @@ export default class App {
         }
     }
 
+    private updateStarlinksTimeUiVisibility(): void {
+        const isStarlinks = this.currentScene === 'starlinks'
+        this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks)
+        this.nowBtn?.classList.toggle('hidden', !isStarlinks)
+    }
+
+    private updateStarlinksTimeUi(): void {
+        if (this.currentScene !== 'starlinks') return
+        if (!this.simTimeEl) return
+        this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs)
+    }
+
+    private jumpStarlinksToNow(): void {
+        if (this.currentScene !== 'starlinks') return
+        this.world.simTimeMs = Date.now()
+        OrbitSystem.update(this.world, 0)
+        this.updateStarlinksTimeUi()
+    }
+
     private updatePlayPauseButton(): void {
         if (this.playPauseBtn) {
             this.playPauseBtn.textContent = this.isRunning ? 'Pause' : 'Start'
@@ -419,6 +445,7 @@ export default class App {
         const SAT_SIZE_M = 30_000
 
         world.timeFactor = 100
+        world.simTimeMs = Date.now()
 
         // Camera focused on Earth
         const cameraEntity = world.createEntity()
@@ -444,6 +471,15 @@ export default class App {
             // Deterministic-ish shuffle so we don't bias toward any ordering
             shuffleInPlace(candidates)
 
+            // Start simulation time from the dataset epoch (use the newest epoch across the set)
+            let startEpochMs = 0
+            for (const o of candidates) {
+                if (Number.isFinite(o.epochMs) && o.epochMs > startEpochMs) startEpochMs = o.epochMs
+            }
+            if (startEpochMs > 0) {
+                world.simTimeMs = startEpochMs
+            }
+
             for (let i = 0; i < candidates.length && created < MAX_SATELLITES; i++) {
                 const orbit = candidates[i]
 
@@ -453,10 +489,12 @@ export default class App {
                 world.addComponent(entity, Size, SAT_SIZE_M)
                 world.addComponent(entity, Color, new Vec3(1, 1, 1))
                 world.addComponent(entity, Temperature, 1000)
-                world.addComponent(entity, Orbit, orbitToComponent(orbit))
+                const orbitComp = orbitToComponent(orbit)
+                setOrbitTimeMs(orbitComp, world.simTimeMs)
+                world.addComponent(entity, Orbit, orbitComp)
 
                 // Set initial position even if the sim is paused
-                setPositionFromOrbit(pos, world.getComponent(entity, Orbit)!)
+                setPositionFromOrbit(pos, orbitComp)
 
                 created++
             }
@@ -481,11 +519,13 @@ export default class App {
                     semiMajorAxis: a,
                     eccentricity: e,
                     meanMotionRadPerSec,
-                    meanAnomaly: M,
+                    epochMs: world.simTimeMs,
+                    meanAnomalyAtEpoch: M,
                     inclinationRad: incl,
                     raanRad: raan,
                     argPeriapsisRad: argPeri
                 })
+                setOrbitTimeMs(orbit, world.simTimeMs)
 
                 world.addComponent(entity, Position, pos)
                 world.addComponent(entity, Size, SAT_SIZE_M)
@@ -538,6 +578,8 @@ export default class App {
             this.world = newWorld
             this.currentScene = scene
             this.wireWorldCallbacks(newWorld)
+            this.updateStarlinksTimeUiVisibility()
+            this.updateStarlinksTimeUi()
 
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = scene === 'proto-planets' ? 'Proto planets' : 'Starlinks'
@@ -584,6 +626,11 @@ export default class App {
             fasterBtn.addEventListener('click', () => {
                 this.world.timeFactor *= 2
             })
+        }
+
+        const nowBtn = document.getElementById('nowButton')
+        if (nowBtn) {
+            nowBtn.addEventListener('click', () => this.jumpStarlinksToNow())
         }
 
         // Settings button
@@ -649,6 +696,8 @@ export default class App {
         this.world.updateVisuals()
         this.perfMonitor.renderEnd()
 
+        this.updateStarlinksTimeUi()
+
         const entityCount = this.world.query(Position, Size).length
         this.perfMonitor.frameEnd(entityCount)
     }
@@ -675,7 +724,8 @@ type ParsedOrbit = {
     semiMajorAxis: number
     eccentricity: number
     meanMotionRadPerSec: number
-    meanAnomaly: number
+    epochMs: number
+    meanAnomalyAtEpoch: number
     inclinationRad: number
     raanRad: number
     argPeriapsisRad: number
@@ -779,19 +829,19 @@ function parseStarlinkOrbit(rec: SpaceXStarlinkRecord, muEarth: number): ParsedO
     if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0) return null
 
     const epochMs = typeof epochRaw === 'string' ? Date.parse(epochRaw) : NaN
-    const dtSec = Number.isFinite(epochMs) ? (Date.now() - epochMs) / 1000 : 0
+    if (!Number.isFinite(epochMs)) return null
 
     const inclinationRad = degToRad(inclinationDeg)
     const raanRad = degToRad(raanDeg)
     const argPeriapsisRad = degToRad(argPeriDeg)
-    const meanAnomaly0 = degToRad(meanAnomalyDeg)
-    const meanAnomaly = wrapAngleRad(meanAnomaly0 + meanMotionRadPerSec * dtSec)
+    const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg))
 
     return {
         semiMajorAxis,
         eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
         meanMotionRadPerSec,
-        meanAnomaly,
+        epochMs,
+        meanAnomalyAtEpoch,
         inclinationRad,
         raanRad,
         argPeriapsisRad
@@ -804,6 +854,7 @@ function parseTleOrbit(line1: string, line2: string, muEarth: number): ParsedOrb
 
     const epochField = line1.substring(18, 32).trim()
     const epochMs = parseTleEpochMs(epochField)
+    if (!Number.isFinite(epochMs)) return null
 
     const inclinationDeg = toNumber(line2.substring(8, 16))
     const raanDeg = toNumber(line2.substring(17, 25))
@@ -829,19 +880,17 @@ function parseTleOrbit(line1: string, line2: string, muEarth: number): ParsedOrb
     const semiMajorAxis = Math.cbrt(muEarth / (meanMotionRadPerSec * meanMotionRadPerSec))
     if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0) return null
 
-    const dtSec = Number.isFinite(epochMs) ? (Date.now() - epochMs) / 1000 : 0
-
     const inclinationRad = degToRad(inclinationDeg)
     const raanRad = degToRad(raanDeg)
     const argPeriapsisRad = degToRad(argPeriDeg)
-    const meanAnomaly0 = degToRad(meanAnomalyDeg)
-    const meanAnomaly = wrapAngleRad(meanAnomaly0 + meanMotionRadPerSec * dtSec)
+    const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg))
 
     return {
         semiMajorAxis,
         eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
         meanMotionRadPerSec,
-        meanAnomaly,
+        epochMs,
+        meanAnomalyAtEpoch,
         inclinationRad,
         raanRad,
         argPeriapsisRad
@@ -891,7 +940,9 @@ function orbitToComponent(orbit: ParsedOrbit) {
         semiMajorAxis: orbit.semiMajorAxis,
         eccentricity: orbit.eccentricity,
         meanMotionRadPerSec: orbit.meanMotionRadPerSec,
-        meanAnomaly: orbit.meanAnomaly,
+        meanAnomaly: orbit.meanAnomalyAtEpoch,
+        epochMs: orbit.epochMs,
+        meanAnomalyAtEpoch: orbit.meanAnomalyAtEpoch,
         m11,
         m12,
         m21,
@@ -899,6 +950,16 @@ function orbitToComponent(orbit: ParsedOrbit) {
         m31,
         m32
     }
+}
+
+function setOrbitTimeMs(orbit: {
+    meanMotionRadPerSec: number
+    epochMs: number
+    meanAnomalyAtEpoch: number
+    meanAnomaly: number
+}, simTimeMs: number): void {
+    const dtSec = (simTimeMs - orbit.epochMs) / 1000
+    orbit.meanAnomaly = wrapAngleRad(orbit.meanAnomalyAtEpoch + orbit.meanMotionRadPerSec * dtSec)
 }
 
 function setPositionFromOrbit(pos: Vec3, orbit: {
@@ -948,6 +1009,16 @@ function solveKeplerE(M: number, e: number): number {
         E -= f / fp
     }
     return E
+}
+
+function formatUtcTimeMs(ms: number): string {
+    if (!Number.isFinite(ms)) return '--'
+    try {
+        const iso = new Date(ms).toISOString()
+        return iso.replace('T', ' ').replace(/\.\d{3}Z$/, 'Z')
+    } catch {
+        return '--'
+    }
 }
 
 function toNumber(v: unknown): number {

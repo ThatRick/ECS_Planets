@@ -25,6 +25,7 @@ export class World {
     // Time management
     ticker;
     _lastVisualUpdate = 0;
+    simTimeMs = Date.now();
     // Performance monitoring callback
     onSimTick;
     onPhysicsStart;
@@ -63,6 +64,7 @@ export class World {
     }
     tickSimulation() {
         const dt = this.ticker.getDeltaTime();
+        this.simTimeMs += dt * 1000;
         this.onPhysicsStart?.();
         for (const system of this.simulationSystems) {
             system.update(this, dt);

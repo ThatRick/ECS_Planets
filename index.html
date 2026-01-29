@@ -193,6 +193,10 @@
             color: #fc8;
         }
 
+        .hidden {
+            display: none !important;
+        }
+
         #canvas-container {
             flex: 1;
             position: relative;
@@ -276,6 +280,7 @@
                 <button id="slowerButton" title="Slower (0.5x)">-</button>
                 <span class="time-factor"><span id="timeFactor">100</span>x</span>
                 <button id="fasterButton" title="Faster (2x)">+</button>
+                <button id="nowButton" class="hidden" title="Jump Starlinks time to now">Now</button>
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
             <button id="perfBtn" class="icon-btn" title="Performance stats">&#9776;</button>
@@ -302,6 +307,10 @@
                     <span>Sim:</span>
                     <span id="simRateDisplay" class="status-value monospace">--</span>
                     <span>Hz</span>
+                </div>
+                <div id="simTimeStatus" class="status-item hidden">
+                    <span>Time:</span>
+                    <span id="simTimeDisplay" class="status-value monospace">--</span>
                 </div>
                 <span id="rendererBadge" class="renderer-badge">--</span>
             </div>

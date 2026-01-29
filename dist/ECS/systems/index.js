@@ -1,5 +1,6 @@
 export { GravitySystemSimple } from './GravitySystemSimple.js';
 export { GravitySystemBarnesHut } from './GravitySystemBarnesHut.js';
+export { OrbitSystem } from './OrbitSystem.js';
 export { createCameraMovementSystem } from './CameraMovementSystem.js';
 export { createPlanetRenderer } from './PlanetRenderer.js';
 export { createPlanetRendererWebGL, isWebGL2Available } from './PlanetRendererWebGL.js';

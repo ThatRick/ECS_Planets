@@ -15,8 +15,18 @@ export const OrbitSystem: System = {
             const orbit = world.getComponent(id, Orbit)
             if (!pos || !orbit) continue
 
-            // Advance mean anomaly
-            orbit.meanAnomaly = wrapAngleRad(orbit.meanAnomaly + orbit.meanMotionRadPerSec * dt)
+            // Update mean anomaly at the current simulation time (absolute propagation).
+            // Falls back to incremental propagation if epoch data is missing.
+            if (
+                Number.isFinite(world.simTimeMs) &&
+                Number.isFinite(orbit.epochMs) &&
+                Number.isFinite(orbit.meanAnomalyAtEpoch)
+            ) {
+                const dtSec = (world.simTimeMs - orbit.epochMs) / 1000
+                orbit.meanAnomaly = wrapAngleRad(orbit.meanAnomalyAtEpoch + orbit.meanMotionRadPerSec * dtSec)
+            } else {
+                orbit.meanAnomaly = wrapAngleRad(orbit.meanAnomaly + orbit.meanMotionRadPerSec * dt)
+            }
 
             // Propagate orbit in the perifocal plane
             const e = orbit.eccentricity

@@ -1,4 +1,4 @@
-import { Position, Size, Temperature, CameraComponent } from '../Components.js';
+import { Position, Size, Color, Temperature, CameraComponent } from '../Components.js';
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -9,7 +9,7 @@ in vec2 a_vertex;
 // Per-instance attributes
 in vec3 a_position;
 in float a_size;
-in float a_temperature;
+in vec3 a_color;
 
 // Uniforms
 uniform vec2 u_resolution;
@@ -21,13 +21,13 @@ uniform float u_minPixelSize;  // Minimum size in pixels (typically 1.0)
 
 // Varyings to fragment shader
 out vec2 v_uv;
-out float v_temperature;
+out vec3 v_color;
 out float v_depth;
 
 void main() {
     // Pass to fragment shader
     v_uv = a_vertex;
-    v_temperature = a_temperature;
+    v_color = a_color;
 
     // Transform center to view space to get distance
     vec4 viewCenter = u_viewMatrix * vec4(a_position, 1.0);
@@ -53,48 +53,49 @@ void main() {
     v_depth = -viewPos.z;
 }
 `;
-// Fragment shader - renders circle with temperature-based coloring
+// Fragment shader - renders sphere-like shading with per-instance color
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
 in vec2 v_uv;
-in float v_temperature;
+in vec3 v_color;
 in float v_depth;
 
 out vec4 fragColor;
 
 void main() {
     // Discard pixels outside unit circle
-    float dist = length(v_uv);
-    if (dist > 1.0) discard;
+    float distSq = dot(v_uv, v_uv);
+    if (distSq > 1.0) discard;
+    float dist = sqrt(distSq);
 
     // Smooth edge anti-aliasing
     float alpha = 1.0 - smoothstep(0.95, 1.0, dist);
 
-    // Temperature to color using logarithmic scale
-    float logTemp = log(max(v_temperature, 1.0)) / log(10.0);
+    // Reconstruct a sphere normal from the projected disc (billboarded sphere)
+    float z = sqrt(max(0.0, 1.0 - distSq));
+    vec3 normal = normalize(vec3(v_uv, z));
 
-    float minBrightness = 80.0 / 255.0;
+    // Fixed view-space light direction for a simple 3D look
+    vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
 
-    // Red: ramps from log10(100)=2 to log10(500)=2.7
-    float r = clamp((logTemp - 2.0) / 0.7, 0.0, 1.0);
-    r = mix(minBrightness, 1.0, r);
+    float ambient = 0.28;
+    float diffuse = max(dot(normal, lightDir), 0.0);
+    vec3 col = v_color * (ambient + diffuse * 0.72);
 
-    // Green: ramps from log10(200)=2.3 to log10(2000)=3.3
-    float g = clamp((logTemp - 2.3) / 1.0, 0.0, 1.0);
-    g = mix(minBrightness, 1.0, g);
+    // Subtle specular highlight
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    vec3 reflectDir = reflect(-lightDir, normal);
+    float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
+    col += spec * 0.15;
 
-    // Blue: ramps from log10(500)=2.7 to log10(5000)=3.7
-    float b = clamp((logTemp - 2.7) / 1.0, 0.0, 1.0);
-    b = mix(minBrightness, 1.0, b);
-
-    fragColor = vec4(r, g, b, alpha);
+    fragColor = vec4(col, alpha);
 }
 `;
 // Maximum entities we can render (pre-allocated buffer size)
 const MAX_INSTANCES = 100000;
-// Instance data stride: x, y, z, size, temperature (5 floats per instance)
-const INSTANCE_STRIDE = 5;
+// Instance data stride: x, y, z, size, r, g, b (7 floats per instance)
+const INSTANCE_STRIDE = 7;
 /**
  * Factory to create a WebGL-based 3D planet renderer.
  * Uses instanced rendering with perspective projection and billboarded sprites.
@@ -126,7 +127,7 @@ export function createPlanetRendererWebGL(canvas) {
         vertex: gl.getAttribLocation(program, 'a_vertex'),
         position: gl.getAttribLocation(program, 'a_position'),
         size: gl.getAttribLocation(program, 'a_size'),
-        temperature: gl.getAttribLocation(program, 'a_temperature')
+        color: gl.getAttribLocation(program, 'a_color')
     };
     const uniforms = {
         resolution: gl.getUniformLocation(program, 'u_resolution'),
@@ -166,13 +167,14 @@ export function createPlanetRendererWebGL(canvas) {
     gl.enableVertexAttribArray(attribs.size);
     gl.vertexAttribPointer(attribs.size, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 12);
     gl.vertexAttribDivisor(attribs.size, 1);
-    // a_temperature (float): offset 16
-    gl.enableVertexAttribArray(attribs.temperature);
-    gl.vertexAttribPointer(attribs.temperature, 1, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
-    gl.vertexAttribDivisor(attribs.temperature, 1);
+    // a_color (vec3): offset 16
+    gl.enableVertexAttribArray(attribs.color);
+    gl.vertexAttribPointer(attribs.color, 3, gl.FLOAT, false, INSTANCE_STRIDE * 4, 16);
+    gl.vertexAttribDivisor(attribs.color, 1);
     gl.bindVertexArray(null);
     // Pre-allocate instance data buffer on CPU side
     const instanceData = new Float32Array(MAX_INSTANCES * INSTANCE_STRIDE);
+    const tmpRgb = new Float32Array(3);
     // Pre-allocate matrix buffers
     const viewMatrix = new Float32Array(16);
     const projMatrix = new Float32Array(16);
@@ -267,20 +269,35 @@ export function createPlanetRendererWebGL(canvas) {
             projMatrix[14] = 2 * far * near * rangeInv;
             projMatrix[15] = 0;
             // Get renderable planets
-            const planets = world.query(Position, Size, Temperature);
-            const planetCount = Math.min(planets.length, MAX_INSTANCES);
+            const bodies = world.query(Position, Size);
+            const bodyCount = Math.min(bodies.length, MAX_INSTANCES);
             // Build instance data buffer
             let offset = 0;
-            for (let i = 0; i < planetCount; i++) {
-                const id = planets[i];
+            for (let i = 0; i < bodyCount; i++) {
+                const id = bodies[i];
                 const pos = world.getComponent(id, Position);
                 const size = world.getComponent(id, Size);
+                const color = world.getComponent(id, Color);
                 const temp = world.getComponent(id, Temperature);
+                let r = 1, g = 1, b = 1;
+                if (color) {
+                    r = color.x;
+                    g = color.y;
+                    b = color.z;
+                }
+                else if (temp !== undefined) {
+                    temperatureToRGB(temp, tmpRgb);
+                    r = tmpRgb[0];
+                    g = tmpRgb[1];
+                    b = tmpRgb[2];
+                }
                 instanceData[offset++] = pos.x;
                 instanceData[offset++] = pos.y;
                 instanceData[offset++] = pos.z;
                 instanceData[offset++] = size;
-                instanceData[offset++] = temp;
+                instanceData[offset++] = r;
+                instanceData[offset++] = g;
+                instanceData[offset++] = b;
             }
             // Upload instance data to GPU
             gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
@@ -299,7 +316,7 @@ export function createPlanetRendererWebGL(canvas) {
             gl.uniform3f(uniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
             gl.uniform1f(uniforms.minPixelSize, 1.0); // Minimum 1 pixel size
             // Draw all instances with a single draw call
-            gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, planetCount);
+            gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, bodyCount);
             gl.bindVertexArray(null);
         }
     };
@@ -329,4 +346,21 @@ export function isWebGL2Available() {
     catch {
         return false;
     }
+}
+function temperatureToRGB(temp, out) {
+    const minBrightness = 80 / 255;
+    const logTemp = Math.log10(Math.max(temp, 1));
+    // Matches the old shader mapping (log-scale ramps)
+    const r = clamp01((logTemp - 2.0) / 0.7);
+    const g = clamp01((logTemp - 2.3) / 1.0);
+    const b = clamp01((logTemp - 2.7) / 1.0);
+    out[0] = lerp(minBrightness, 1, r);
+    out[1] = lerp(minBrightness, 1, g);
+    out[2] = lerp(minBrightness, 1, b);
+}
+function clamp01(x) {
+    return Math.max(0, Math.min(1, x));
+}
+function lerp(a, b, t) {
+    return a + (b - a) * t;
 }

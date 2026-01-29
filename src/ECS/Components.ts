@@ -23,6 +23,8 @@ export interface OrbitData {
     eccentricity: number           // 0..1
     meanMotionRadPerSec: number    // radians / second
     meanAnomaly: number            // radians (mutable)
+    epochMs: number                // unix ms (UTC) for meanAnomalyAtEpoch
+    meanAnomalyAtEpoch: number     // radians at epochMs
 
     // Precomputed rotation matrix (perifocal XY -> world XYZ).
     // For a perifocal position [x, y, 0], world position is:

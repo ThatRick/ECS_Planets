@@ -1,7 +1,7 @@
 import Vec3 from './lib/Vector3.js';
-import { World, Position, Velocity, Mass, Size, Temperature, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, createCameraMovementSystem, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
+import { World, Position, Velocity, Mass, Size, Color, Temperature, Orbit, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, OrbitSystem, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
-import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues } from './SettingsPanel.js';
+import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues, setGravityAlgoValue } from './SettingsPanel.js';
 const GRAVITY_SYSTEMS = {
     'simple': GravitySystemSimple,
     'barnes-hut': GravitySystemBarnesHut
@@ -13,14 +13,29 @@ export default class App {
     canvas;
     world;
     bodyCountEl;
+    sceneNameEl;
+    sceneSelectEl;
+    loadSceneBtn;
+    simTimeStatusEl;
+    simTimeEl;
+    nowBtn;
     perfMonitor;
     currentGravityType = 'barnes-hut';
     currentRenderer = 'canvas';
+    currentScene = 'proto-planets';
     isRunning = false;
     playPauseBtn;
+    sharedCameraSystem;
+    sharedRendererSystem = null;
     constructor(canvas) {
         this.canvas = canvas;
         this.bodyCountEl = document.getElementById('bodyCount');
+        this.sceneNameEl = document.getElementById('sceneName');
+        this.sceneSelectEl = document.getElementById('sceneSelect');
+        this.loadSceneBtn = document.getElementById('loadSceneBtn');
+        this.simTimeStatusEl = document.getElementById('simTimeStatus');
+        this.simTimeEl = document.getElementById('simTimeDisplay');
+        this.nowBtn = document.getElementById('nowButton');
         this.playPauseBtn = document.getElementById('playPauseBtn');
         this.perfMonitor = new PerfMonitor();
         // Add performance overlay (hidden by default)
@@ -37,9 +52,27 @@ export default class App {
         window.addEventListener('orientationchange', () => {
             setTimeout(() => this.resizeCanvas(), 100);
         });
-        this.world = new World(100); // 100 Hz physics
-        this.setup();
+        // Create shared visual systems once (avoid duplicated event listeners / GL init)
+        this.sharedCameraSystem = createCameraMovementSystem(this.canvas);
+        if (isWebGL2Available()) {
+            this.sharedRendererSystem = createPlanetRendererWebGL(this.canvas);
+            this.currentRenderer = 'webgl';
+            console.log('Using WebGL 2 renderer (3D)');
+        }
+        else {
+            console.warn('WebGL 2 not available - falling back to Canvas 2D renderer');
+            this.sharedRendererSystem = createPlanetRenderer(this.canvas);
+            this.currentRenderer = 'canvas';
+        }
+        this.updateRendererBadge();
+        // Start with the default scene
+        this.world = new World(100);
+        this.setupProtoPlanets(this.world);
+        this.wireWorldCallbacks(this.world);
+        this.setSettingsEnabled(true);
+        this.perfMonitor.reset();
         this.bindControls();
+        this.updateStarlinksTimeUiVisibility();
         // Main render loop
         const loop = () => {
             this.update();
@@ -58,6 +91,8 @@ export default class App {
         return this.currentGravityType;
     }
     switchGravitySystem(type) {
+        if (this.currentScene !== 'proto-planets')
+            return;
         if (type === this.currentGravityType)
             return;
         // Remove current gravity system
@@ -133,6 +168,8 @@ export default class App {
         }
     }
     resetSimulation(settings) {
+        if (this.currentScene !== 'proto-planets')
+            return;
         // Clear all entities except camera
         const entities = this.world.query(Position, Velocity, Mass);
         for (const id of entities) {
@@ -175,6 +212,25 @@ export default class App {
             badge.className = `renderer-badge ${this.currentRenderer}`;
         }
     }
+    updateStarlinksTimeUiVisibility() {
+        const isStarlinks = this.currentScene === 'starlinks';
+        this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks);
+        this.nowBtn?.classList.toggle('hidden', !isStarlinks);
+    }
+    updateStarlinksTimeUi() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        if (!this.simTimeEl)
+            return;
+        this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs);
+    }
+    jumpStarlinksToNow() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        this.world.simTimeMs = Date.now();
+        OrbitSystem.update(this.world, 0);
+        this.updateStarlinksTimeUi();
+    }
     updatePlayPauseButton() {
         if (this.playPauseBtn) {
             this.playPauseBtn.textContent = this.isRunning ? 'Pause' : 'Start';
@@ -192,9 +248,29 @@ export default class App {
         }
         this.updatePlayPauseButton();
     }
-    setup() {
-        const world = this.world;
-        // Initial configuration (matching DEFAULT_SETTINGS in SettingsPanel)
+    setSettingsEnabled(enabled) {
+        const settingsBtn = document.getElementById('settingsBtn');
+        if (settingsBtn) {
+            settingsBtn.disabled = !enabled;
+            settingsBtn.style.opacity = enabled ? '1' : '0.5';
+            settingsBtn.style.cursor = enabled ? 'pointer' : 'default';
+        }
+        if (!enabled) {
+            toggleSettingsPanel(false);
+        }
+    }
+    wireWorldCallbacks(world) {
+        world.on('entityRemoved', () => this.updateBodyCount());
+        this.updateBodyCount();
+        // Hook up simulation tick tracking for performance monitoring
+        world.onSimTick = () => this.perfMonitor.simTick();
+        world.onPhysicsStart = () => this.perfMonitor.physicsStart();
+        world.onPhysicsEnd = () => this.perfMonitor.physicsEnd();
+        world.onGravityTime = (ms) => this.perfMonitor.recordGravityTime(ms);
+        world.onCollisionTime = (ms) => this.perfMonitor.recordCollisionTime(ms);
+    }
+    setupProtoPlanets(world) {
+        // Initial configuration (matching SettingsPanel defaults)
         const config = {
             bodyCount: 300,
             radiusMin: 10 * KM_TO_M, // 10 km in meters
@@ -236,33 +312,162 @@ export default class App {
             world.addComponent(entity, Temperature, config.initialTemp);
         }
         // Register systems
-        // Simulation systems (run on fixed timestep)
-        world.registerSystem(GravitySystemBarnesHut);
-        // Visual systems (run on requestAnimationFrame)
-        world.registerSystem(createCameraMovementSystem(this.canvas));
-        // Use WebGL renderer (required for 3D)
-        if (isWebGL2Available()) {
-            world.registerSystem(createPlanetRendererWebGL(this.canvas));
-            this.currentRenderer = 'webgl';
-            console.log('Using WebGL 2 renderer (3D)');
+        world.registerSystem(GRAVITY_SYSTEMS[this.currentGravityType]);
+        world.registerSystem(this.sharedCameraSystem);
+        if (this.sharedRendererSystem) {
+            world.registerSystem(this.sharedRendererSystem);
         }
-        else {
-            console.error('WebGL 2 not available - 3D rendering requires WebGL 2');
-            this.currentRenderer = 'canvas';
-        }
-        this.updateRendererBadge();
-        // Update body count when entities are removed
-        world.on('entityRemoved', () => this.updateBodyCount());
-        this.updateBodyCount();
         // Update settings panel with initial values
         updateSettingsPanelValues(config);
-        // Hook up simulation tick tracking for performance monitoring
-        world.onSimTick = () => this.perfMonitor.simTick();
-        world.onPhysicsStart = () => this.perfMonitor.physicsStart();
-        world.onPhysicsEnd = () => this.perfMonitor.physicsEnd();
-        world.onGravityTime = (ms) => this.perfMonitor.recordGravityTime(ms);
-        world.onCollisionTime = (ms) => this.perfMonitor.recordCollisionTime(ms);
+        setGravityAlgoValue(this.currentGravityType);
         console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`);
+    }
+    async setupStarlinks(world) {
+        const EARTH_RADIUS_M = 6_371_000;
+        const MU_EARTH = 3.986004418e14; // m^3 / s^2
+        const MAX_SATELLITES = 2500;
+        const SAT_SIZE_M = 30_000;
+        world.timeFactor = 100;
+        world.simTimeMs = Date.now();
+        // Camera focused on Earth
+        const cameraEntity = world.createEntity();
+        world.addComponent(cameraEntity, CameraComponent, {
+            distance: EARTH_RADIUS_M * 3.2,
+            theta: Math.PI / 4,
+            phi: Math.PI / 7,
+            zoom: 1.0
+        });
+        // Earth at origin
+        const earth = world.createEntity();
+        world.addComponent(earth, Position, new Vec3(0, 0, 0));
+        world.addComponent(earth, Size, EARTH_RADIUS_M);
+        world.addComponent(earth, Color, new Vec3(0.12, 0.35, 0.95));
+        world.addComponent(earth, Temperature, 300);
+        // Load live Starlink orbital data and spawn satellites
+        let created = 0;
+        try {
+            const candidates = await fetchStarlinkOrbits(MU_EARTH, MAX_SATELLITES);
+            // Deterministic-ish shuffle so we don't bias toward any ordering
+            shuffleInPlace(candidates);
+            // Start simulation time from the dataset epoch (use the newest epoch across the set)
+            let startEpochMs = 0;
+            for (const o of candidates) {
+                if (Number.isFinite(o.epochMs) && o.epochMs > startEpochMs)
+                    startEpochMs = o.epochMs;
+            }
+            if (startEpochMs > 0) {
+                world.simTimeMs = startEpochMs;
+            }
+            for (let i = 0; i < candidates.length && created < MAX_SATELLITES; i++) {
+                const orbit = candidates[i];
+                const entity = world.createEntity();
+                const pos = new Vec3(0, 0, 0);
+                world.addComponent(entity, Position, pos);
+                world.addComponent(entity, Size, SAT_SIZE_M);
+                world.addComponent(entity, Color, new Vec3(1, 1, 1));
+                world.addComponent(entity, Temperature, 1000);
+                const orbitComp = orbitToComponent(orbit);
+                setOrbitTimeMs(orbitComp, world.simTimeMs);
+                world.addComponent(entity, Orbit, orbitComp);
+                // Set initial position even if the sim is paused
+                setPositionFromOrbit(pos, orbitComp);
+                created++;
+            }
+        }
+        catch (err) {
+            console.warn('Failed to load live Starlink data; falling back to synthetic orbits.', err);
+            // Fallback: synthetic shell
+            for (let i = 0; i < Math.min(800, MAX_SATELLITES); i++) {
+                const entity = world.createEntity();
+                const pos = new Vec3(0, 0, 0);
+                const altitude = 550_000 + (Math.random() - 0.5) * 50_000;
+                const a = EARTH_RADIUS_M + altitude;
+                const e = 0;
+                const meanMotionRadPerSec = Math.sqrt(MU_EARTH / (a * a * a));
+                const M = Math.random() * Math.PI * 2;
+                const incl = degToRad(53 + (Math.random() - 0.5) * 4);
+                const raan = Math.random() * Math.PI * 2;
+                const argPeri = Math.random() * Math.PI * 2;
+                const orbit = orbitToComponent({
+                    semiMajorAxis: a,
+                    eccentricity: e,
+                    meanMotionRadPerSec,
+                    epochMs: world.simTimeMs,
+                    meanAnomalyAtEpoch: M,
+                    inclinationRad: incl,
+                    raanRad: raan,
+                    argPeriapsisRad: argPeri
+                });
+                setOrbitTimeMs(orbit, world.simTimeMs);
+                world.addComponent(entity, Position, pos);
+                world.addComponent(entity, Size, SAT_SIZE_M);
+                world.addComponent(entity, Color, new Vec3(1, 1, 1));
+                world.addComponent(entity, Temperature, 1000);
+                world.addComponent(entity, Orbit, orbit);
+                setPositionFromOrbit(pos, orbit);
+                created++;
+            }
+        }
+        world.registerSystem(OrbitSystem);
+        world.registerSystem(this.sharedCameraSystem);
+        if (this.sharedRendererSystem) {
+            world.registerSystem(this.sharedRendererSystem);
+        }
+        console.log(`Starlinks scene loaded (${created} satellites)`);
+    }
+    async loadScene(scene) {
+        if (scene === this.currentScene)
+            return;
+        const wasRunning = this.isRunning;
+        if (this.isRunning) {
+            this.world.stop();
+            this.isRunning = false;
+            this.updatePlayPauseButton();
+        }
+        if (this.loadSceneBtn) {
+            this.loadSceneBtn.disabled = true;
+            this.loadSceneBtn.textContent = 'Loading…';
+        }
+        if (this.sceneSelectEl) {
+            this.sceneSelectEl.disabled = true;
+        }
+        const newWorld = new World(scene === 'proto-planets' ? 100 : 60);
+        try {
+            if (scene === 'proto-planets') {
+                this.setupProtoPlanets(newWorld);
+                this.setSettingsEnabled(true);
+            }
+            else {
+                await this.setupStarlinks(newWorld);
+                this.setSettingsEnabled(false);
+            }
+            this.world = newWorld;
+            this.currentScene = scene;
+            this.wireWorldCallbacks(newWorld);
+            this.updateStarlinksTimeUiVisibility();
+            this.updateStarlinksTimeUi();
+            if (this.sceneNameEl) {
+                this.sceneNameEl.textContent = scene === 'proto-planets' ? 'Proto planets' : 'Starlinks';
+            }
+            if (this.sceneSelectEl) {
+                this.sceneSelectEl.value = scene;
+            }
+            this.perfMonitor.reset();
+            if (wasRunning) {
+                this.world.start();
+                this.isRunning = true;
+                this.updatePlayPauseButton();
+            }
+        }
+        finally {
+            if (this.loadSceneBtn) {
+                this.loadSceneBtn.disabled = false;
+                this.loadSceneBtn.textContent = 'Load';
+            }
+            if (this.sceneSelectEl) {
+                this.sceneSelectEl.disabled = false;
+            }
+        }
     }
     bindControls() {
         // Play/Pause button
@@ -283,6 +488,10 @@ export default class App {
                 this.world.timeFactor *= 2;
             });
         }
+        const nowBtn = document.getElementById('nowButton');
+        if (nowBtn) {
+            nowBtn.addEventListener('click', () => this.jumpStarlinksToNow());
+        }
         // Settings button
         const settingsBtn = document.getElementById('settingsBtn');
         if (settingsBtn) {
@@ -297,6 +506,14 @@ export default class App {
                 togglePerfOverlay();
             });
         }
+        // Scene loader
+        const loadSceneBtn = document.getElementById('loadSceneBtn');
+        const sceneSelect = document.getElementById('sceneSelect');
+        if (loadSceneBtn && sceneSelect) {
+            loadSceneBtn.addEventListener('click', () => {
+                void this.loadScene(sceneSelect.value);
+            });
+        }
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             // Ignore if typing in an input
@@ -308,7 +525,9 @@ export default class App {
                     this.togglePlayPause();
                     break;
                 case 's':
-                    toggleSettingsPanel();
+                    if (this.currentScene === 'proto-planets') {
+                        toggleSettingsPanel();
+                    }
                     break;
                 case 'p':
                     togglePerfOverlay();
@@ -318,8 +537,8 @@ export default class App {
     }
     updateBodyCount() {
         if (this.bodyCountEl) {
-            // Count entities with Mass component (planets only, not camera)
-            const count = this.world.query(Mass).length;
+            // Count renderable entities (Position + Size)
+            const count = this.world.query(Position, Size).length;
             this.bodyCountEl.textContent = String(count);
         }
     }
@@ -329,7 +548,280 @@ export default class App {
         this.perfMonitor.renderStart();
         this.world.updateVisuals();
         this.perfMonitor.renderEnd();
-        const entityCount = this.world.query(Mass).length;
+        this.updateStarlinksTimeUi();
+        const entityCount = this.world.query(Position, Size).length;
         this.perfMonitor.frameEnd(entityCount);
+    }
+}
+async function fetchStarlinkOrbits(muEarth, max) {
+    try {
+        const orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max);
+        if (orbits.length > 0)
+            return orbits;
+    }
+    catch (err) {
+        console.warn('TLE API fetch failed; falling back to SpaceX API.', err);
+    }
+    const starlinks = await fetchStarlinks();
+    return starlinks
+        .map((rec) => parseStarlinkOrbit(rec, muEarth))
+        .filter((o) => !!o)
+        .slice(0, max);
+}
+async function fetchStarlinkOrbitsFromTleApi(muEarth, max) {
+    const pageSize = 100;
+    const maxPages = 60; // safety bound
+    const seenIds = new Set();
+    const results = [];
+    for (let page = 1; page <= maxPages && results.length < max; page++) {
+        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`;
+        const res = await fetch(url);
+        if (!res.ok) {
+            throw new Error(`TLE API request failed: ${res.status} ${res.statusText}`);
+        }
+        const data = (await res.json());
+        const member = Array.isArray(data.member) ? data.member : [];
+        if (member.length === 0)
+            break;
+        for (const rec of member) {
+            const satId = typeof rec.satelliteId === 'number' ? rec.satelliteId : NaN;
+            if (Number.isFinite(satId)) {
+                if (seenIds.has(satId))
+                    continue;
+                seenIds.add(satId);
+            }
+            const line1 = typeof rec.line1 === 'string' ? rec.line1 : '';
+            const line2 = typeof rec.line2 === 'string' ? rec.line2 : '';
+            const orbit = parseTleOrbit(line1, line2, muEarth);
+            if (!orbit)
+                continue;
+            results.push(orbit);
+            if (results.length >= max)
+                break;
+        }
+        if (!data.view?.next)
+            break;
+    }
+    return results;
+}
+async function fetchStarlinks() {
+    const res = await fetch('https://api.spacexdata.com/v4/starlink');
+    if (!res.ok) {
+        throw new Error(`Starlink API request failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+}
+function parseStarlinkOrbit(rec, muEarth) {
+    const st = rec.spaceTrack;
+    if (!st)
+        return null;
+    // Ignore decayed objects when present
+    const decay = st['DECAY_DATE'];
+    if (typeof decay === 'string' && decay.length > 0)
+        return null;
+    const epochRaw = st['EPOCH'];
+    const meanMotionRevPerDay = toNumber(st['MEAN_MOTION']);
+    const eccentricity = toNumber(st['ECCENTRICITY']);
+    const inclinationDeg = toNumber(st['INCLINATION']);
+    const raanDeg = toNumber(st['RA_OF_ASC_NODE']);
+    const argPeriDeg = toNumber(st['ARG_OF_PERICENTER']);
+    const meanAnomalyDeg = toNumber(st['MEAN_ANOMALY']);
+    if (!Number.isFinite(meanMotionRevPerDay) ||
+        !Number.isFinite(eccentricity) ||
+        !Number.isFinite(inclinationDeg) ||
+        !Number.isFinite(raanDeg) ||
+        !Number.isFinite(argPeriDeg) ||
+        !Number.isFinite(meanAnomalyDeg)) {
+        return null;
+    }
+    const meanMotionRadPerSec = (meanMotionRevPerDay * Math.PI * 2) / 86400;
+    if (!Number.isFinite(meanMotionRadPerSec) || meanMotionRadPerSec <= 0)
+        return null;
+    // a = cbrt(mu / n^2)
+    const semiMajorAxis = Math.cbrt(muEarth / (meanMotionRadPerSec * meanMotionRadPerSec));
+    if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0)
+        return null;
+    const epochMs = typeof epochRaw === 'string' ? Date.parse(epochRaw) : NaN;
+    if (!Number.isFinite(epochMs))
+        return null;
+    const inclinationRad = degToRad(inclinationDeg);
+    const raanRad = degToRad(raanDeg);
+    const argPeriapsisRad = degToRad(argPeriDeg);
+    const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg));
+    return {
+        semiMajorAxis,
+        eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
+        meanMotionRadPerSec,
+        epochMs,
+        meanAnomalyAtEpoch,
+        inclinationRad,
+        raanRad,
+        argPeriapsisRad
+    };
+}
+function parseTleOrbit(line1, line2, muEarth) {
+    // TLE line 1 epoch: columns 19-32 (1-based), format YYDDD.DDDDDDDD
+    if (line1.length < 32 || line2.length < 63)
+        return null;
+    const epochField = line1.substring(18, 32).trim();
+    const epochMs = parseTleEpochMs(epochField);
+    if (!Number.isFinite(epochMs))
+        return null;
+    const inclinationDeg = toNumber(line2.substring(8, 16));
+    const raanDeg = toNumber(line2.substring(17, 25));
+    const eccentricity = parseFloat(`0.${line2.substring(26, 33).trim()}`);
+    const argPeriDeg = toNumber(line2.substring(34, 42));
+    const meanAnomalyDeg = toNumber(line2.substring(43, 51));
+    const meanMotionRevPerDay = toNumber(line2.substring(52, 63));
+    if (!Number.isFinite(inclinationDeg) ||
+        !Number.isFinite(raanDeg) ||
+        !Number.isFinite(eccentricity) ||
+        !Number.isFinite(argPeriDeg) ||
+        !Number.isFinite(meanAnomalyDeg) ||
+        !Number.isFinite(meanMotionRevPerDay)) {
+        return null;
+    }
+    const meanMotionRadPerSec = (meanMotionRevPerDay * Math.PI * 2) / 86400;
+    if (!Number.isFinite(meanMotionRadPerSec) || meanMotionRadPerSec <= 0)
+        return null;
+    const semiMajorAxis = Math.cbrt(muEarth / (meanMotionRadPerSec * meanMotionRadPerSec));
+    if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0)
+        return null;
+    const inclinationRad = degToRad(inclinationDeg);
+    const raanRad = degToRad(raanDeg);
+    const argPeriapsisRad = degToRad(argPeriDeg);
+    const meanAnomalyAtEpoch = wrapAngleRad(degToRad(meanAnomalyDeg));
+    return {
+        semiMajorAxis,
+        eccentricity: Math.max(0, Math.min(0.99, eccentricity)),
+        meanMotionRadPerSec,
+        epochMs,
+        meanAnomalyAtEpoch,
+        inclinationRad,
+        raanRad,
+        argPeriapsisRad
+    };
+}
+function parseTleEpochMs(epoch) {
+    // YYDDD.DDDDDDDD
+    if (epoch.length < 5)
+        return NaN;
+    const yy = parseInt(epoch.slice(0, 2), 10);
+    if (!Number.isFinite(yy))
+        return NaN;
+    const year = yy < 57 ? 2000 + yy : 1900 + yy;
+    const dayOfYear = parseFloat(epoch.slice(2));
+    if (!Number.isFinite(dayOfYear))
+        return NaN;
+    const day = Math.floor(dayOfYear);
+    const dayFraction = dayOfYear - day;
+    // UTC
+    const msAtYearStart = Date.UTC(year, 0, 1, 0, 0, 0, 0);
+    const ms = msAtYearStart
+        + (day - 1) * 86400 * 1000
+        + dayFraction * 86400 * 1000;
+    return ms;
+}
+function orbitToComponent(orbit) {
+    const cosO = Math.cos(orbit.raanRad);
+    const sinO = Math.sin(orbit.raanRad);
+    const cosI = Math.cos(orbit.inclinationRad);
+    const sinI = Math.sin(orbit.inclinationRad);
+    const cosW = Math.cos(orbit.argPeriapsisRad);
+    const sinW = Math.sin(orbit.argPeriapsisRad);
+    // Perifocal -> inertial rotation (only XY columns needed since z=0)
+    const m11 = cosO * cosW - sinO * sinW * cosI;
+    const m12 = -cosO * sinW - sinO * cosW * cosI;
+    const m21 = sinO * cosW + cosO * sinW * cosI;
+    const m22 = -sinO * sinW + cosO * cosW * cosI;
+    const m31 = sinW * sinI;
+    const m32 = cosW * sinI;
+    return {
+        semiMajorAxis: orbit.semiMajorAxis,
+        eccentricity: orbit.eccentricity,
+        meanMotionRadPerSec: orbit.meanMotionRadPerSec,
+        meanAnomaly: orbit.meanAnomalyAtEpoch,
+        epochMs: orbit.epochMs,
+        meanAnomalyAtEpoch: orbit.meanAnomalyAtEpoch,
+        m11,
+        m12,
+        m21,
+        m22,
+        m31,
+        m32
+    };
+}
+function setOrbitTimeMs(orbit, simTimeMs) {
+    const dtSec = (simTimeMs - orbit.epochMs) / 1000;
+    orbit.meanAnomaly = wrapAngleRad(orbit.meanAnomalyAtEpoch + orbit.meanMotionRadPerSec * dtSec);
+}
+function setPositionFromOrbit(pos, orbit) {
+    const e = orbit.eccentricity;
+    const a = orbit.semiMajorAxis;
+    const M = orbit.meanAnomaly;
+    let xPerif;
+    let yPerif;
+    if (e < 1e-6) {
+        xPerif = a * Math.cos(M);
+        yPerif = a * Math.sin(M);
+    }
+    else {
+        const E = solveKeplerE(M, e);
+        const cosE = Math.cos(E);
+        const sinE = Math.sin(E);
+        const sqrtOneMinusESq = Math.sqrt(1 - e * e);
+        xPerif = a * (cosE - e);
+        yPerif = a * (sqrtOneMinusESq * sinE);
+    }
+    const xEci = orbit.m11 * xPerif + orbit.m12 * yPerif;
+    const yEci = orbit.m21 * xPerif + orbit.m22 * yPerif;
+    const zEci = orbit.m31 * xPerif + orbit.m32 * yPerif;
+    pos.x = xEci;
+    pos.y = zEci;
+    pos.z = yEci;
+}
+function solveKeplerE(M, e) {
+    let E = M;
+    for (let i = 0; i < 6; i++) {
+        const f = E - e * Math.sin(E) - M;
+        const fp = 1 - e * Math.cos(E);
+        E -= f / fp;
+    }
+    return E;
+}
+function formatUtcTimeMs(ms) {
+    if (!Number.isFinite(ms))
+        return '--';
+    try {
+        const iso = new Date(ms).toISOString();
+        return iso.replace('T', ' ').replace(/\.\d{3}Z$/, 'Z');
+    }
+    catch {
+        return '--';
+    }
+}
+function toNumber(v) {
+    if (typeof v === 'number')
+        return v;
+    if (typeof v === 'string')
+        return parseFloat(v);
+    return NaN;
+}
+function degToRad(deg) {
+    return (deg * Math.PI) / 180;
+}
+function wrapAngleRad(rad) {
+    const TWO_PI = Math.PI * 2;
+    rad %= TWO_PI;
+    if (rad < 0)
+        rad += TWO_PI;
+    return rad;
+}
+function shuffleInPlace(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
     }
 }
