@@ -18,11 +18,17 @@ export function createCameraMovementSystem(canvas: HTMLCanvasElement): System {
 
     // Touch pinch state
     let lastPinchDistance = 0
+    let lastGestureScale = 0
 
     // Configuration
     const rotationSensitivity = 0.005  // Radians per pixel
-    const zoomStep = 0.15
-    const distanceStep = 0.1
+    // Wheel/trackpad zoom:
+    // - Use a continuous exponential mapping based on wheel delta magnitude.
+    // - On macOS, trackpad pinch often comes through as wheel events with ctrlKey=true.
+    //   Treat those as "distance" (dolly) to match touch pinch behavior.
+    const zoomSensitivity = 0.0008        // exp(-deltaPx * k) for FOV zoom
+    const distanceSensitivity = 0.0006    // exp(+deltaPx * k) for dolly distance
+    const pinchSensitivity = 0.6          // <1 => less sensitive pinch in log-space
     const minPhi = -Math.PI / 2 + 0.1  // Prevent gimbal lock at poles
     const maxPhi = Math.PI / 2 - 0.1
     const minZoom = 0.1
@@ -37,6 +43,15 @@ export function createCameraMovementSystem(canvas: HTMLCanvasElement): System {
             return { x: ev.offsetX, y: ev.offsetY }
         }
         return { x: ev.clientX - rect.left, y: ev.clientY - rect.top }
+    }
+
+    function normalizeWheelDeltaY(ev: WheelEvent): number {
+        // Normalize to approximate pixels across delta modes.
+        // DOM_DELTA_PIXEL = 0, DOM_DELTA_LINE = 1, DOM_DELTA_PAGE = 2.
+        let deltaY = ev.deltaY
+        if (ev.deltaMode === 1) deltaY *= 16
+        else if (ev.deltaMode === 2) deltaY *= window.innerHeight
+        return deltaY
     }
 
     // Mouse events
@@ -73,13 +88,21 @@ export function createCameraMovementSystem(canvas: HTMLCanvasElement): System {
 
     canvas.addEventListener('wheel', (ev: WheelEvent) => {
         ev.preventDefault()
-        if (ev.shiftKey) {
-            // Shift + scroll: change distance (move camera closer/farther)
-            const distanceFactor = ev.deltaY > 0 ? (1 + distanceStep) : (1 - distanceStep)
+        const deltaY = normalizeWheelDeltaY(ev)
+
+        // Ignore tiny deltas (trackpad noise)
+        if (Math.abs(deltaY) < 0.5) return
+
+        // Clamp extreme deltas to avoid huge jumps (e.g., momentum scroll spikes)
+        const clampedDeltaY = Math.max(-500, Math.min(500, deltaY))
+
+        // Shift+scroll (and macOS pinch-gesture wheel events) => dolly distance
+        if (ev.shiftKey || ev.ctrlKey) {
+            const distanceFactor = Math.exp(clampedDeltaY * distanceSensitivity)
             deltaDistance *= distanceFactor
         } else {
-            // Normal scroll: zoom (change FOV)
-            const zoomFactor = ev.deltaY > 0 ? (1 - zoomStep) : (1 + zoomStep)
+            // Normal scroll => FOV zoom
+            const zoomFactor = Math.exp(-clampedDeltaY * zoomSensitivity)
             deltaZoom *= zoomFactor
         }
     }, { passive: false })
@@ -141,10 +164,33 @@ export function createCameraMovementSystem(canvas: HTMLCanvasElement): System {
 
             if (lastPinchDistance > 0) {
                 const zoomFactor = distance / lastPinchDistance
-                deltaDistance /= zoomFactor  // Pinch in = move closer
+                deltaDistance /= Math.pow(zoomFactor, pinchSensitivity)  // Pinch in = move closer
             }
             lastPinchDistance = distance
         }
+    }, { passive: false })
+
+    // Safari (macOS) trackpad pinch gesture events (non-standard)
+    canvas.addEventListener('gesturestart', (ev: Event) => {
+        ev.preventDefault()
+        lastGestureScale = 1
+    }, { passive: false })
+
+    canvas.addEventListener('gesturechange', (ev: Event) => {
+        ev.preventDefault()
+        const gestureEv = ev as Event & { scale?: number }
+        if (typeof gestureEv.scale !== 'number') return
+
+        if (lastGestureScale > 0) {
+            const zoomFactor = gestureEv.scale / lastGestureScale
+            deltaDistance /= Math.pow(zoomFactor, pinchSensitivity)
+        }
+        lastGestureScale = gestureEv.scale
+    }, { passive: false })
+
+    canvas.addEventListener('gestureend', (ev: Event) => {
+        ev.preventDefault()
+        lastGestureScale = 0
     }, { passive: false })
 
     return {
