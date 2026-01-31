@@ -57,6 +57,8 @@ export default class App {
     private sharedCameraSystem: System
     private sharedRendererSystem: System | null = null
     private legendEl: HTMLElement | null = null
+    private satelliteStatusMap: Map<number, string> = new Map()  // entity ID → status code
+    private satSizeM: number = 30_000
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
@@ -339,15 +341,34 @@ export default class App {
         ]
 
         let html = '<div class="legend-title">Satellite Status</div>'
-        for (const [, label, color] of entries) {
+        for (const [code, label, color] of entries) {
             const r = Math.round(color.x * 255)
             const g = Math.round(color.y * 255)
             const b = Math.round(color.z * 255)
-            html += `<div class="legend-entry"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</div>`
+            html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</label>`
         }
 
         legend.innerHTML = html
+
+        // Wire up checkbox filtering
+        legend.addEventListener('change', (e) => {
+            const target = e.target as HTMLInputElement
+            if (target.type !== 'checkbox') return
+            const code = target.dataset.status
+            if (!code) return
+            this.toggleStatusVisibility(code, target.checked)
+        })
+
         return legend
+    }
+
+    private toggleStatusVisibility(statusCode: string, visible: boolean): void {
+        const size = visible ? this.satSizeM : 0
+        for (const [entityId, code] of this.satelliteStatusMap) {
+            if (code === statusCode) {
+                this.world.addComponent(entityId, Size, size)
+            }
+        }
     }
 
     private updateStarlinksTimeUi(): void {
@@ -484,6 +505,8 @@ export default class App {
         const MU_EARTH = 3.986004418e14 // m^3 / s^2
         const MAX_SATELLITES = 10000
         const SAT_SIZE_M = 30_000
+        this.satSizeM = SAT_SIZE_M
+        this.satelliteStatusMap.clear()
 
         world.timeFactor = 100
         world.simTimeMs = Date.now()
@@ -527,13 +550,15 @@ export default class App {
 
                 const entity = world.createEntity()
                 const pos = new Vec3(0, 0, 0)
+                const statusCode = getStarlinkOrbitStatusCode(orbit.noradId)
                 world.addComponent(entity, Position, pos)
                 world.addComponent(entity, Size, SAT_SIZE_M)
-                world.addComponent(entity, Color, starlinkStatusToColor(getStarlinkOrbitStatusCode(orbit.noradId)))
+                world.addComponent(entity, Color, starlinkStatusToColor(statusCode))
                 world.addComponent(entity, Temperature, 1000)
                 const orbitComp = orbitToComponent(orbit)
                 setOrbitTimeMs(orbitComp, world.simTimeMs)
                 world.addComponent(entity, Orbit, orbitComp)
+                this.satelliteStatusMap.set(entity, statusCode ?? 'unknown')
 
                 // Set initial position even if the sim is paused
                 setPositionFromOrbit(pos, orbitComp)
@@ -575,6 +600,7 @@ export default class App {
                 world.addComponent(entity, Color, new Vec3(1, 1, 1))
                 world.addComponent(entity, Temperature, 1000)
                 world.addComponent(entity, Orbit, orbit)
+                this.satelliteStatusMap.set(entity, 'unknown')
 
                 setPositionFromOrbit(pos, orbit)
                 created++

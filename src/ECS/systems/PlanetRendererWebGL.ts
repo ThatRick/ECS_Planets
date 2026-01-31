@@ -567,6 +567,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): System {
 
                     const pos = world.getComponent(id, Position)!
                     const size = world.getComponent(id, Size)!
+                    if (size <= 0) continue
                     const color = world.getComponent(id, Color)
                     const temp = world.getComponent(id, Temperature)
 
