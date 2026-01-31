@@ -482,7 +482,7 @@ export default class App {
     private async setupStarlinks(world: World): Promise<void> {
         const EARTH_RADIUS_M = 6_371_000
         const MU_EARTH = 3.986004418e14 // m^3 / s^2
-        const MAX_SATELLITES = 2500
+        const MAX_SATELLITES = 10000
         const SAT_SIZE_M = 30_000
 
         world.timeFactor = 100
@@ -794,23 +794,61 @@ type ParsedOrbit = {
     argPeriapsisRad: number
 }
 
-async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+const STARLINK_CACHE_KEY = 'starlink_orbits_v1'
+const STARLINK_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000 // 12 hours
+
+function getCachedOrbits(): ParsedOrbit[] | null {
     try {
-        const orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
-        if (orbits.length > 0) return orbits
+        const raw = localStorage.getItem(STARLINK_CACHE_KEY)
+        if (!raw) return null
+        const cache = JSON.parse(raw) as { fetchedAt: number; orbits: ParsedOrbit[] }
+        if (Date.now() - cache.fetchedAt > STARLINK_CACHE_MAX_AGE_MS) return null
+        if (!Array.isArray(cache.orbits) || cache.orbits.length === 0) return null
+        return cache.orbits
+    } catch {
+        return null
+    }
+}
+
+function setCachedOrbits(orbits: ParsedOrbit[]): void {
+    try {
+        localStorage.setItem(STARLINK_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), orbits }))
+    } catch {
+        // localStorage full or unavailable — ignore
+    }
+}
+
+async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+    // Return cached data immediately if fresh enough
+    const cached = getCachedOrbits()
+    if (cached) {
+        console.log(`Using cached Starlink data (${cached.length} orbits)`)
+        return cached.slice(0, max)
+    }
+
+    let orbits: ParsedOrbit[] = []
+    try {
+        orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
     } catch (err) {
         console.warn('TLE API fetch failed; falling back to SpaceX API.', err)
     }
 
-    const starlinks = await fetchStarlinks()
-    return starlinks
-        .map((rec) => parseStarlinkOrbit(rec, muEarth))
-        .filter((o): o is ParsedOrbit => !!o)
-        .slice(0, max)
+    if (orbits.length === 0) {
+        const starlinks = await fetchStarlinks()
+        orbits = starlinks
+            .map((rec) => parseStarlinkOrbit(rec, muEarth))
+            .filter((o): o is ParsedOrbit => !!o)
+            .slice(0, max)
+    }
+
+    if (orbits.length > 0) {
+        setCachedOrbits(orbits)
+    }
+    return orbits
 }
 
 async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Promise<ParsedOrbit[]> {
-    const pageSize = 100
+    const pageSize = 500
     const maxPages = Math.ceil(max / pageSize)
 
     // Fetch first page to verify the API is reachable and discover total results
