@@ -57,6 +57,8 @@ export default class App {
     private sharedCameraSystem: System
     private sharedRendererSystem: System | null = null
     private legendEl: HTMLElement | null = null
+    private satelliteStatusMap: Map<number, string> = new Map()  // entity ID → status code
+    private satSizeM: number = 30_000
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
@@ -339,15 +341,34 @@ export default class App {
         ]
 
         let html = '<div class="legend-title">Satellite Status</div>'
-        for (const [, label, color] of entries) {
+        for (const [code, label, color] of entries) {
             const r = Math.round(color.x * 255)
             const g = Math.round(color.y * 255)
             const b = Math.round(color.z * 255)
-            html += `<div class="legend-entry"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</div>`
+            html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</label>`
         }
 
         legend.innerHTML = html
+
+        // Wire up checkbox filtering
+        legend.addEventListener('change', (e) => {
+            const target = e.target as HTMLInputElement
+            if (target.type !== 'checkbox') return
+            const code = target.dataset.status
+            if (!code) return
+            this.toggleStatusVisibility(code, target.checked)
+        })
+
         return legend
+    }
+
+    private toggleStatusVisibility(statusCode: string, visible: boolean): void {
+        const size = visible ? this.satSizeM : 0
+        for (const [entityId, code] of this.satelliteStatusMap) {
+            if (code === statusCode) {
+                this.world.addComponent(entityId, Size, size)
+            }
+        }
     }
 
     private updateStarlinksTimeUi(): void {
@@ -482,8 +503,10 @@ export default class App {
     private async setupStarlinks(world: World): Promise<void> {
         const EARTH_RADIUS_M = 6_371_000
         const MU_EARTH = 3.986004418e14 // m^3 / s^2
-        const MAX_SATELLITES = 2500
+        const MAX_SATELLITES = 10000
         const SAT_SIZE_M = 30_000
+        this.satSizeM = SAT_SIZE_M
+        this.satelliteStatusMap.clear()
 
         world.timeFactor = 100
         world.simTimeMs = Date.now()
@@ -527,13 +550,15 @@ export default class App {
 
                 const entity = world.createEntity()
                 const pos = new Vec3(0, 0, 0)
+                const statusCode = getStarlinkOrbitStatusCode(orbit.noradId)
                 world.addComponent(entity, Position, pos)
                 world.addComponent(entity, Size, SAT_SIZE_M)
-                world.addComponent(entity, Color, starlinkStatusToColor(getStarlinkOrbitStatusCode(orbit.noradId)))
+                world.addComponent(entity, Color, starlinkStatusToColor(statusCode))
                 world.addComponent(entity, Temperature, 1000)
                 const orbitComp = orbitToComponent(orbit)
                 setOrbitTimeMs(orbitComp, world.simTimeMs)
                 world.addComponent(entity, Orbit, orbitComp)
+                this.satelliteStatusMap.set(entity, statusCode ?? 'unknown')
 
                 // Set initial position even if the sim is paused
                 setPositionFromOrbit(pos, orbitComp)
@@ -575,6 +600,7 @@ export default class App {
                 world.addComponent(entity, Color, new Vec3(1, 1, 1))
                 world.addComponent(entity, Temperature, 1000)
                 world.addComponent(entity, Orbit, orbit)
+                this.satelliteStatusMap.set(entity, 'unknown')
 
                 setPositionFromOrbit(pos, orbit)
                 created++
@@ -794,39 +820,102 @@ type ParsedOrbit = {
     argPeriapsisRad: number
 }
 
-async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+const STARLINK_CACHE_KEY = 'starlink_orbits_v1'
+const STARLINK_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000 // 12 hours
+
+function getCachedOrbits(): ParsedOrbit[] | null {
     try {
-        const orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
-        if (orbits.length > 0) return orbits
+        const raw = localStorage.getItem(STARLINK_CACHE_KEY)
+        if (!raw) return null
+        const cache = JSON.parse(raw) as { fetchedAt: number; orbits: ParsedOrbit[] }
+        if (Date.now() - cache.fetchedAt > STARLINK_CACHE_MAX_AGE_MS) return null
+        if (!Array.isArray(cache.orbits) || cache.orbits.length === 0) return null
+        return cache.orbits
+    } catch {
+        return null
+    }
+}
+
+function setCachedOrbits(orbits: ParsedOrbit[]): void {
+    try {
+        localStorage.setItem(STARLINK_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), orbits }))
+    } catch {
+        // localStorage full or unavailable — ignore
+    }
+}
+
+async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+    // Return cached data immediately if fresh enough
+    const cached = getCachedOrbits()
+    if (cached) {
+        console.log(`Using cached Starlink data (${cached.length} orbits)`)
+        return cached.slice(0, max)
+    }
+
+    let orbits: ParsedOrbit[] = []
+    try {
+        orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
     } catch (err) {
         console.warn('TLE API fetch failed; falling back to SpaceX API.', err)
     }
 
-    const starlinks = await fetchStarlinks()
-    return starlinks
-        .map((rec) => parseStarlinkOrbit(rec, muEarth))
-        .filter((o): o is ParsedOrbit => !!o)
-        .slice(0, max)
+    if (orbits.length === 0) {
+        const starlinks = await fetchStarlinks()
+        orbits = starlinks
+            .map((rec) => parseStarlinkOrbit(rec, muEarth))
+            .filter((o): o is ParsedOrbit => !!o)
+            .slice(0, max)
+    }
+
+    if (orbits.length > 0) {
+        setCachedOrbits(orbits)
+    }
+    return orbits
 }
 
 async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Promise<ParsedOrbit[]> {
-    const pageSize = 100
-    const maxPages = 60 // safety bound
+    const pageSize = 500
+    const maxPages = Math.ceil(max / pageSize)
+
+    // Fetch first page to verify the API is reachable and discover total results
+    const firstUrl = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=1`
+    const firstRes = await fetch(firstUrl)
+    if (!firstRes.ok) {
+        throw new Error(`TLE API request failed: ${firstRes.status} ${firstRes.statusText}`)
+    }
+    const firstData = (await firstRes.json()) as TleApiResponse
+    const firstMember = Array.isArray(firstData.member) ? firstData.member : []
+    if (firstMember.length === 0) return []
+
+    // Determine how many more pages to fetch
+    const hasMore = !!firstData.view?.next
+    const remainingPages = hasMore ? maxPages - 1 : 0
+
+    // Fetch remaining pages concurrently (browser connection pool limits concurrency naturally)
+    const pagePromises: Promise<TleApiTleRecord[]>[] = []
+    for (let page = 2; page <= 1 + remainingPages; page++) {
+        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`
+        pagePromises.push(
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) return []
+                    return (res.json() as Promise<TleApiResponse>).then(
+                        d => Array.isArray(d.member) ? d.member : []
+                    )
+                })
+                .catch(() => [] as TleApiTleRecord[])
+        )
+    }
+
+    const remainingResults = await Promise.all(pagePromises)
+
+    // Combine all pages: first page + remaining pages in order
+    const allPages = [firstMember, ...remainingResults]
 
     const seenIds = new Set<number>()
     const results: ParsedOrbit[] = []
 
-    for (let page = 1; page <= maxPages && results.length < max; page++) {
-        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`
-        const res = await fetch(url)
-        if (!res.ok) {
-            throw new Error(`TLE API request failed: ${res.status} ${res.statusText}`)
-        }
-
-        const data = (await res.json()) as TleApiResponse
-        const member = Array.isArray(data.member) ? data.member : []
-        if (member.length === 0) break
-
+    for (const member of allPages) {
         for (const rec of member) {
             const line1 = typeof rec.line1 === 'string' ? rec.line1 : ''
             const line2 = typeof rec.line2 === 'string' ? rec.line2 : ''
@@ -836,10 +925,8 @@ async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Prom
             seenIds.add(orbit.noradId)
 
             results.push(orbit)
-            if (results.length >= max) break
+            if (results.length >= max) return results
         }
-
-        if (!data.view?.next) break
     }
 
     return results

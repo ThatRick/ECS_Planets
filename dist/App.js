@@ -625,19 +625,38 @@ async function fetchStarlinkOrbits(muEarth, max) {
 }
 async function fetchStarlinkOrbitsFromTleApi(muEarth, max) {
     const pageSize = 100;
-    const maxPages = 60; // safety bound
+    const maxPages = Math.ceil(max / pageSize);
+    // Fetch first page to verify the API is reachable and discover total results
+    const firstUrl = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=1`;
+    const firstRes = await fetch(firstUrl);
+    if (!firstRes.ok) {
+        throw new Error(`TLE API request failed: ${firstRes.status} ${firstRes.statusText}`);
+    }
+    const firstData = (await firstRes.json());
+    const firstMember = Array.isArray(firstData.member) ? firstData.member : [];
+    if (firstMember.length === 0)
+        return [];
+    // Determine how many more pages to fetch
+    const hasMore = !!firstData.view?.next;
+    const remainingPages = hasMore ? maxPages - 1 : 0;
+    // Fetch remaining pages concurrently (browser connection pool limits concurrency naturally)
+    const pagePromises = [];
+    for (let page = 2; page <= 1 + remainingPages; page++) {
+        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`;
+        pagePromises.push(fetch(url)
+            .then(res => {
+            if (!res.ok)
+                return [];
+            return res.json().then(d => Array.isArray(d.member) ? d.member : []);
+        })
+            .catch(() => []));
+    }
+    const remainingResults = await Promise.all(pagePromises);
+    // Combine all pages: first page + remaining pages in order
+    const allPages = [firstMember, ...remainingResults];
     const seenIds = new Set();
     const results = [];
-    for (let page = 1; page <= maxPages && results.length < max; page++) {
-        const url = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=${page}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-            throw new Error(`TLE API request failed: ${res.status} ${res.statusText}`);
-        }
-        const data = (await res.json());
-        const member = Array.isArray(data.member) ? data.member : [];
-        if (member.length === 0)
-            break;
+    for (const member of allPages) {
         for (const rec of member) {
             const line1 = typeof rec.line1 === 'string' ? rec.line1 : '';
             const line2 = typeof rec.line2 === 'string' ? rec.line2 : '';
@@ -649,10 +668,8 @@ async function fetchStarlinkOrbitsFromTleApi(muEarth, max) {
             seenIds.add(orbit.noradId);
             results.push(orbit);
             if (results.length >= max)
-                break;
+                return results;
         }
-        if (!data.view?.next)
-            break;
     }
     return results;
 }

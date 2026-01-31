@@ -433,7 +433,6 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): System {
         new Uint8Array([30, 90, 240, 255]))
 
     const earthImg = new Image()
-    earthImg.crossOrigin = 'anonymous'
     earthImg.onload = () => {
         gl.bindTexture(gl.TEXTURE_2D, earthTexture)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, earthImg)
@@ -448,7 +447,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): System {
     earthImg.onerror = () => {
         console.warn('Failed to load Earth texture; using solid color fallback')
     }
-    earthImg.src = 'https://eoimages.gsfc.nasa.gov/images/imagerecords/73000/73909/world.topo.bathy.200412.3x5400x2700.jpg'
+    // Local file avoids CORS issues with NASA servers
+    earthImg.src = 'earth-texture.png'
 
     return {
         name: 'PlanetRendererWebGL',
@@ -567,6 +567,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): System {
 
                     const pos = world.getComponent(id, Position)!
                     const size = world.getComponent(id, Size)!
+                    if (size <= 0) continue
                     const color = world.getComponent(id, Color)
                     const temp = world.getComponent(id, Temperature)
 

@@ -95,7 +95,7 @@ void main() {
     fragColor = vec4(col * alpha, alpha);
 }
 `;
-// Earth shader: parallels/meridians grid + optional user-location marker.
+// Earth shader: parallels/meridians grid + optional texture + user-location marker.
 const EARTH_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -110,7 +110,12 @@ uniform vec3 u_cameraForward;
 uniform vec3 u_userDirWorld;      // normalized
 uniform float u_hasUserLocation;  // 0 or 1
 
+uniform sampler2D u_earthTexture;
+uniform float u_hasTexture;       // 0 or 1
+
 out vec4 fragColor;
+
+const float PI = 3.14159265359;
 
 float gridLine(float coord, float stepRad, float fw) {
     float halfStep = stepRad * 0.5;
@@ -131,16 +136,14 @@ void main() {
     float z = sqrt(1.0 - distSq);
     vec3 normalLocal = normalize(vec3(v_uv, z));
 
-    // Simple lighting in view-facing space
+    // Lighting factors (computed before choosing base color)
     vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
     float ambient = 0.28;
     float diffuse = max(dot(normalLocal, lightDir), 0.0);
-    vec3 col = v_color * (ambient + diffuse * 0.72);
 
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 reflectDir = reflect(-lightDir, normalLocal);
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
-    col += spec * 0.15;
 
     // Map the visible hemisphere to world directions so the grid is anchored to world axes.
     vec3 normalWorld = normalize(
@@ -152,9 +155,22 @@ void main() {
     float lat = asin(clamp(normalWorld.y, -1.0, 1.0));
     float lon = atan(normalWorld.z, normalWorld.x);
 
+    // Choose base color: texture or solid
+    vec3 baseColor;
+    if (u_hasTexture > 0.5) {
+        vec2 texUV = vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+        baseColor = texture(u_earthTexture, texUV).rgb;
+    } else {
+        baseColor = v_color;
+    }
+
+    // Apply lighting to base color
+    vec3 col = baseColor * (ambient + diffuse * 0.72);
+    col += spec * 0.15;
+
     float latStep = radians(15.0);
     float lonStep = radians(15.0);
-    float gridPx = 1.25;
+    float gridPx = 0.75;
 
     // Latitude: asin is continuous, so fwidth works directly
     float fwLat = max(fwidth(lat) * gridPx, 1e-4);
@@ -179,7 +195,9 @@ void main() {
     float pm = 1.0 - smoothstep(lonW, lonW * 1.5, abs(lon));
     grid = max(grid, max(eq, pm) * 0.6);
 
-    col = mix(col, vec3(0.95, 0.95, 1.0), grid * 0.35);
+    // Grid is more subtle over texture, more visible on solid color
+    float gridAlpha = u_hasTexture > 0.5 ? 0.2 : 0.35;
+    col = mix(col, vec3(0.95, 0.95, 1.0), grid * gridAlpha);
 
     // User location marker (red with a thin white ring)
     if (u_hasUserLocation > 0.5) {
@@ -271,7 +289,9 @@ export function createPlanetRendererWebGL(canvas) {
         cameraForward: gl.getUniformLocation(earthProgram, 'u_cameraForward'),
         minPixelSize: gl.getUniformLocation(earthProgram, 'u_minPixelSize'),
         userDirWorld: gl.getUniformLocation(earthProgram, 'u_userDirWorld'),
-        hasUserLocation: gl.getUniformLocation(earthProgram, 'u_hasUserLocation')
+        hasUserLocation: gl.getUniformLocation(earthProgram, 'u_hasUserLocation'),
+        earthTexture: gl.getUniformLocation(earthProgram, 'u_earthTexture'),
+        hasTexture: gl.getUniformLocation(earthProgram, 'u_hasTexture')
     };
     // Create unit quad geometry (two triangles forming a square from -1 to 1)
     const quadVertices = new Float32Array([
@@ -360,6 +380,29 @@ export function createPlanetRendererWebGL(canvas) {
             console.warn('User location unavailable:', err);
         }, { enableHighAccuracy: false, maximumAge: 60_000, timeout: 10_000 });
     };
+    // Earth texture (NASA Blue Marble, loaded asynchronously)
+    let earthTextureReady = false;
+    const earthTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, earthTexture);
+    // 1×1 placeholder while loading
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([30, 90, 240, 255]));
+    const earthImg = new Image();
+    earthImg.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, earthTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, earthImg);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        earthTextureReady = true;
+        console.log('Earth texture loaded');
+    };
+    earthImg.onerror = () => {
+        console.warn('Failed to load Earth texture; using solid color fallback');
+    };
+    // Local file avoids CORS issues with NASA servers
+    earthImg.src = 'earth-texture.png';
     return {
         name: 'PlanetRendererWebGL',
         phase: 'visual',
@@ -542,6 +585,11 @@ export function createPlanetRendererWebGL(canvas) {
                 gl.uniform1f(earthUniforms.minPixelSize, minPixelSize);
                 gl.uniform3f(earthUniforms.userDirWorld, userDirWorld[0], userDirWorld[1], userDirWorld[2]);
                 gl.uniform1f(earthUniforms.hasUserLocation, hasUserLocation);
+                // Bind earth texture
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, earthTexture);
+                gl.uniform1i(earthUniforms.earthTexture, 0);
+                gl.uniform1f(earthUniforms.hasTexture, earthTextureReady ? 1.0 : 0.0);
                 gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, earthCount);
                 gl.bindVertexArray(null);
                 return;
