@@ -29,6 +29,11 @@ export default class App {
     sharedCameraSystem;
     sharedRendererSystem = null;
     legendEl = null;
+    satelliteStatusMap = new Map(); // entity ID → status code
+    satelliteNoradMap = new Map(); // entity ID → NORAD ID
+    satSizeM = 30_000;
+    selectedEntity;
+    infoPanel = null;
     constructor(canvas) {
         this.canvas = canvas;
         this.bodyCountEl = document.getElementById('bodyCount');
@@ -50,6 +55,11 @@ export default class App {
         // Add satellite status legend (hidden by default)
         this.legendEl = this.createStarlinkLegend();
         document.body.appendChild(this.legendEl);
+        // Add satellite info panel (hidden by default)
+        this.infoPanel = this.createInfoPanel();
+        document.body.appendChild(this.infoPanel);
+        // Click-to-select satellite detection
+        this.setupClickSelection();
         // Set up responsive canvas
         this.resizeCanvas();
         window.addEventListener('resize', () => this.resizeCanvas());
@@ -242,14 +252,106 @@ export default class App {
             ['G', 'Graveyard', STARLINK_STATUS_COLORS.G],
         ];
         let html = '<div class="legend-title">Satellite Status</div>';
-        for (const [, label, color] of entries) {
+        for (const [code, label, color] of entries) {
             const r = Math.round(color.x * 255);
             const g = Math.round(color.y * 255);
             const b = Math.round(color.z * 255);
-            html += `<div class="legend-entry"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</div>`;
+            html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</label>`;
         }
         legend.innerHTML = html;
+        // Wire up checkbox filtering
+        legend.addEventListener('change', (e) => {
+            const target = e.target;
+            if (target.type !== 'checkbox')
+                return;
+            const code = target.dataset.status;
+            if (!code)
+                return;
+            this.toggleStatusVisibility(code, target.checked);
+        });
         return legend;
+    }
+    toggleStatusVisibility(statusCode, visible) {
+        const size = visible ? this.satSizeM : 0;
+        for (const [entityId, code] of this.satelliteStatusMap) {
+            if (code === statusCode) {
+                this.world.addComponent(entityId, Size, size);
+            }
+        }
+    }
+    createInfoPanel() {
+        const panel = document.createElement('div');
+        panel.id = 'satellite-info';
+        panel.className = 'hidden';
+        return panel;
+    }
+    setupClickSelection() {
+        let downX = 0;
+        let downY = 0;
+        const DRAG_THRESHOLD = 5;
+        this.canvas.addEventListener('pointerdown', (e) => {
+            downX = e.offsetX;
+            downY = e.offsetY;
+        });
+        this.canvas.addEventListener('pointerup', (e) => {
+            const dx = e.offsetX - downX;
+            const dy = e.offsetY - downY;
+            if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) {
+                this.handleCanvasClick(e.offsetX, e.offsetY);
+            }
+        });
+    }
+    handleCanvasClick(screenX, screenY) {
+        if (this.currentScene !== 'starlinks')
+            return;
+        const renderer = this.sharedRendererSystem;
+        if (!renderer?.pick)
+            return;
+        const hitId = renderer.pick(screenX, screenY, this.world);
+        if (hitId !== undefined) {
+            this.selectedEntity = hitId;
+            renderer.selectedEntity = hitId;
+            this.updateInfoPanel(hitId);
+        }
+        else {
+            this.clearSelection();
+        }
+    }
+    updateInfoPanel(entityId) {
+        if (!this.infoPanel)
+            return;
+        const orbit = this.world.getComponent(entityId, Orbit);
+        const status = this.satelliteStatusMap.get(entityId) ?? 'unknown';
+        const noradId = this.satelliteNoradMap.get(entityId);
+        const EARTH_RADIUS_KM = 6371;
+        let html = '<div class="info-title">Satellite Info</div>';
+        if (noradId) {
+            html += `<div class="info-row"><span>NORAD ID</span><span>${noradId}</span></div>`;
+        }
+        html += `<div class="info-row"><span>Status</span><span>${STATUS_LABELS[status] ?? status}</span></div>`;
+        if (orbit) {
+            const altKm = (orbit.semiMajorAxis / 1000) - EARTH_RADIUS_KM;
+            const periodMin = (2 * Math.PI / orbit.meanMotionRadPerSec) / 60;
+            const inclDeg = (Math.acos(
+            // recover inclination from rotation matrix: sinI = sqrt(m31² + m32²)
+            // but we stored it differently — use the orbit fields directly
+            // m31 = sinW * sinI, m32 = cosW * sinI → sinI = sqrt(m31² + m32²)
+            1 - (orbit.m31 * orbit.m31 + orbit.m32 * orbit.m32) < 0 ? 0 :
+                1 - (orbit.m31 * orbit.m31 + orbit.m32 * orbit.m32)) * 180 / Math.PI);
+            html += `<div class="info-row"><span>Altitude</span><span>${altKm.toFixed(0)} km</span></div>`;
+            html += `<div class="info-row"><span>Inclination</span><span>${inclDeg.toFixed(1)}°</span></div>`;
+            html += `<div class="info-row"><span>Period</span><span>${periodMin.toFixed(1)} min</span></div>`;
+            html += `<div class="info-row"><span>Eccentricity</span><span>${orbit.eccentricity.toFixed(4)}</span></div>`;
+        }
+        this.infoPanel.innerHTML = html;
+        this.infoPanel.classList.remove('hidden');
+    }
+    clearSelection() {
+        this.selectedEntity = undefined;
+        const renderer = this.sharedRendererSystem;
+        if (renderer)
+            renderer.selectedEntity = undefined;
+        this.infoPanel?.classList.add('hidden');
     }
     updateStarlinksTimeUi() {
         if (this.currentScene !== 'starlinks')
@@ -359,8 +461,11 @@ export default class App {
     async setupStarlinks(world) {
         const EARTH_RADIUS_M = 6_371_000;
         const MU_EARTH = 3.986004418e14; // m^3 / s^2
-        const MAX_SATELLITES = 2500;
+        const MAX_SATELLITES = 10000;
         const SAT_SIZE_M = 30_000;
+        this.satSizeM = SAT_SIZE_M;
+        this.satelliteStatusMap.clear();
+        this.satelliteNoradMap.clear();
         world.timeFactor = 100;
         world.simTimeMs = Date.now();
         // Camera focused on Earth
@@ -397,13 +502,16 @@ export default class App {
                 const orbit = candidates[i];
                 const entity = world.createEntity();
                 const pos = new Vec3(0, 0, 0);
+                const statusCode = getStarlinkOrbitStatusCode(orbit.noradId);
                 world.addComponent(entity, Position, pos);
                 world.addComponent(entity, Size, SAT_SIZE_M);
-                world.addComponent(entity, Color, starlinkStatusToColor(getStarlinkOrbitStatusCode(orbit.noradId)));
+                world.addComponent(entity, Color, starlinkStatusToColor(statusCode));
                 world.addComponent(entity, Temperature, 1000);
                 const orbitComp = orbitToComponent(orbit);
                 setOrbitTimeMs(orbitComp, world.simTimeMs);
                 world.addComponent(entity, Orbit, orbitComp);
+                this.satelliteStatusMap.set(entity, statusCode ?? 'unknown');
+                this.satelliteNoradMap.set(entity, orbit.noradId);
                 // Set initial position even if the sim is paused
                 setPositionFromOrbit(pos, orbitComp);
                 created++;
@@ -440,6 +548,7 @@ export default class App {
                 world.addComponent(entity, Color, new Vec3(1, 1, 1));
                 world.addComponent(entity, Temperature, 1000);
                 world.addComponent(entity, Orbit, orbit);
+                this.satelliteStatusMap.set(entity, 'unknown');
                 setPositionFromOrbit(pos, orbit);
                 created++;
             }
@@ -467,6 +576,7 @@ export default class App {
         if (this.sceneSelectEl) {
             this.sceneSelectEl.disabled = true;
         }
+        this.clearSelection();
         const newWorld = new World(scene === 'proto-planets' ? 100 : 60);
         try {
             if (scene === 'proto-planets') {
@@ -608,23 +718,60 @@ export default class App {
         this.perfMonitor.frameEnd(entityCount);
     }
 }
-async function fetchStarlinkOrbits(muEarth, max) {
+const STARLINK_CACHE_KEY = 'starlink_orbits_v1';
+const STARLINK_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000; // 12 hours
+function getCachedOrbits() {
     try {
-        const orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max);
-        if (orbits.length > 0)
-            return orbits;
+        const raw = localStorage.getItem(STARLINK_CACHE_KEY);
+        if (!raw)
+            return null;
+        const cache = JSON.parse(raw);
+        if (Date.now() - cache.fetchedAt > STARLINK_CACHE_MAX_AGE_MS)
+            return null;
+        if (!Array.isArray(cache.orbits) || cache.orbits.length === 0)
+            return null;
+        return cache.orbits;
+    }
+    catch {
+        return null;
+    }
+}
+function setCachedOrbits(orbits) {
+    try {
+        localStorage.setItem(STARLINK_CACHE_KEY, JSON.stringify({ fetchedAt: Date.now(), orbits }));
+    }
+    catch {
+        // localStorage full or unavailable — ignore
+    }
+}
+async function fetchStarlinkOrbits(muEarth, max) {
+    // Return cached data immediately if fresh enough
+    const cached = getCachedOrbits();
+    if (cached) {
+        console.log(`Using cached Starlink data (${cached.length} orbits)`);
+        return cached.slice(0, max);
+    }
+    let orbits = [];
+    try {
+        orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max);
     }
     catch (err) {
         console.warn('TLE API fetch failed; falling back to SpaceX API.', err);
     }
-    const starlinks = await fetchStarlinks();
-    return starlinks
-        .map((rec) => parseStarlinkOrbit(rec, muEarth))
-        .filter((o) => !!o)
-        .slice(0, max);
+    if (orbits.length === 0) {
+        const starlinks = await fetchStarlinks();
+        orbits = starlinks
+            .map((rec) => parseStarlinkOrbit(rec, muEarth))
+            .filter((o) => !!o)
+            .slice(0, max);
+    }
+    if (orbits.length > 0) {
+        setCachedOrbits(orbits);
+    }
+    return orbits;
 }
 async function fetchStarlinkOrbitsFromTleApi(muEarth, max) {
-    const pageSize = 100;
+    const pageSize = 500;
     const maxPages = Math.ceil(max / pageSize);
     // Fetch first page to verify the API is reachable and discover total results
     const firstUrl = `https://tle.ivanstanojevic.me/api/tle/?search=STARLINK&sort=popularity&sort-dir=desc&page-size=${pageSize}&page=1`;
@@ -867,6 +1014,21 @@ function solveKeplerE(M, e) {
     }
     return E;
 }
+const STATUS_LABELS = {
+    O: 'Operational',
+    A: 'Ascent',
+    D: 'Drift',
+    T: 'Reserve',
+    S: 'Special',
+    L: 'Lowered',
+    R: 'Retiring',
+    U: 'Anomalous',
+    F: 'Deorbit',
+    M: 'Dead',
+    f: 'Failed orbit',
+    G: 'Graveyard',
+    unknown: 'Unknown'
+};
 const STARLINK_STATUS_COLORS = {
     // Working / in-service-ish
     O: new Vec3(0.25, 0.95, 0.35), // operational shell
