@@ -18,7 +18,8 @@ import {
     createCameraMovementSystem,
     createPlanetRenderer,
     createPlanetRendererWebGL,
-    isWebGL2Available
+    isWebGL2Available,
+    type PickableRenderer
 } from './ECS/index.js'
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js'
 import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode, setGravityAlgoValue } from './SettingsPanel.js'
@@ -58,7 +59,10 @@ export default class App {
     private sharedRendererSystem: System | null = null
     private legendEl: HTMLElement | null = null
     private satelliteStatusMap: Map<number, string> = new Map()  // entity ID → status code
+    private satelliteNoradMap: Map<number, number> = new Map()   // entity ID → NORAD ID
     private satSizeM: number = 30_000
+    private selectedEntity: number | undefined
+    private infoPanel: HTMLElement | null = null
 
     constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas
@@ -87,6 +91,13 @@ export default class App {
         // Add satellite status legend (hidden by default)
         this.legendEl = this.createStarlinkLegend()
         document.body.appendChild(this.legendEl)
+
+        // Add satellite info panel (hidden by default)
+        this.infoPanel = this.createInfoPanel()
+        document.body.appendChild(this.infoPanel)
+
+        // Click-to-select satellite detection
+        this.setupClickSelection()
 
         // Set up responsive canvas
         this.resizeCanvas()
@@ -371,6 +382,91 @@ export default class App {
         }
     }
 
+    private createInfoPanel(): HTMLElement {
+        const panel = document.createElement('div')
+        panel.id = 'satellite-info'
+        panel.className = 'hidden'
+        return panel
+    }
+
+    private setupClickSelection(): void {
+        let downX = 0
+        let downY = 0
+        const DRAG_THRESHOLD = 5
+
+        this.canvas.addEventListener('pointerdown', (e) => {
+            downX = e.offsetX
+            downY = e.offsetY
+        })
+
+        this.canvas.addEventListener('pointerup', (e) => {
+            const dx = e.offsetX - downX
+            const dy = e.offsetY - downY
+            if (dx * dx + dy * dy < DRAG_THRESHOLD * DRAG_THRESHOLD) {
+                this.handleCanvasClick(e.offsetX, e.offsetY)
+            }
+        })
+    }
+
+    private handleCanvasClick(screenX: number, screenY: number): void {
+        if (this.currentScene !== 'starlinks') return
+
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (!renderer?.pick) return
+
+        const hitId = renderer.pick(screenX, screenY, this.world)
+        if (hitId !== undefined) {
+            this.selectedEntity = hitId
+            renderer.selectedEntity = hitId
+            this.updateInfoPanel(hitId)
+        } else {
+            this.clearSelection()
+        }
+    }
+
+    private updateInfoPanel(entityId: number): void {
+        if (!this.infoPanel) return
+
+        const orbit = this.world.getComponent(entityId, Orbit)
+        const status = this.satelliteStatusMap.get(entityId) ?? 'unknown'
+        const noradId = this.satelliteNoradMap.get(entityId)
+
+        const EARTH_RADIUS_KM = 6371
+
+        let html = '<div class="info-title">Satellite Info</div>'
+        if (noradId) {
+            html += `<div class="info-row"><span>NORAD ID</span><span>${noradId}</span></div>`
+        }
+        html += `<div class="info-row"><span>Status</span><span>${STATUS_LABELS[status] ?? status}</span></div>`
+
+        if (orbit) {
+            const altKm = (orbit.semiMajorAxis / 1000) - EARTH_RADIUS_KM
+            const periodMin = (2 * Math.PI / orbit.meanMotionRadPerSec) / 60
+            const inclDeg = (Math.acos(
+                // recover inclination from rotation matrix: sinI = sqrt(m31² + m32²)
+                // but we stored it differently — use the orbit fields directly
+                // m31 = sinW * sinI, m32 = cosW * sinI → sinI = sqrt(m31² + m32²)
+                1 - (orbit.m31 * orbit.m31 + orbit.m32 * orbit.m32) < 0 ? 0 :
+                1 - (orbit.m31 * orbit.m31 + orbit.m32 * orbit.m32)
+            ) * 180 / Math.PI)
+
+            html += `<div class="info-row"><span>Altitude</span><span>${altKm.toFixed(0)} km</span></div>`
+            html += `<div class="info-row"><span>Inclination</span><span>${inclDeg.toFixed(1)}°</span></div>`
+            html += `<div class="info-row"><span>Period</span><span>${periodMin.toFixed(1)} min</span></div>`
+            html += `<div class="info-row"><span>Eccentricity</span><span>${orbit.eccentricity.toFixed(4)}</span></div>`
+        }
+
+        this.infoPanel.innerHTML = html
+        this.infoPanel.classList.remove('hidden')
+    }
+
+    private clearSelection(): void {
+        this.selectedEntity = undefined
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (renderer) renderer.selectedEntity = undefined
+        this.infoPanel?.classList.add('hidden')
+    }
+
     private updateStarlinksTimeUi(): void {
         if (this.currentScene !== 'starlinks') return
         if (!this.simTimeEl) return
@@ -507,6 +603,7 @@ export default class App {
         const SAT_SIZE_M = 30_000
         this.satSizeM = SAT_SIZE_M
         this.satelliteStatusMap.clear()
+        this.satelliteNoradMap.clear()
 
         world.timeFactor = 100
         world.simTimeMs = Date.now()
@@ -559,6 +656,7 @@ export default class App {
                 setOrbitTimeMs(orbitComp, world.simTimeMs)
                 world.addComponent(entity, Orbit, orbitComp)
                 this.satelliteStatusMap.set(entity, statusCode ?? 'unknown')
+                this.satelliteNoradMap.set(entity, orbit.noradId)
 
                 // Set initial position even if the sim is paused
                 setPositionFromOrbit(pos, orbitComp)
@@ -634,6 +732,7 @@ export default class App {
             this.sceneSelectEl.disabled = true
         }
 
+        this.clearSelection()
         const newWorld = new World(scene === 'proto-planets' ? 100 : 60)
         try {
             if (scene === 'proto-planets') {
@@ -1163,6 +1262,22 @@ function solveKeplerE(M: number, e: number): number {
         E -= f / fp
     }
     return E
+}
+
+const STATUS_LABELS: Record<string, string> = {
+    O: 'Operational',
+    A: 'Ascent',
+    D: 'Drift',
+    T: 'Reserve',
+    S: 'Special',
+    L: 'Lowered',
+    R: 'Retiring',
+    U: 'Anomalous',
+    F: 'Deorbit',
+    M: 'Dead',
+    f: 'Failed orbit',
+    G: 'Graveyard',
+    unknown: 'Unknown'
 }
 
 const STARLINK_STATUS_COLORS: Record<string, Vec3> = {

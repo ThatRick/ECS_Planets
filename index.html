@@ -250,6 +250,47 @@
             flex-shrink: 0;
         }
 
+        #satellite-info {
+            position: fixed;
+            bottom: max(12px, env(safe-area-inset-bottom));
+            left: max(12px, env(safe-area-inset-left));
+            background: rgba(20, 20, 22, 0.9);
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 12px;
+            color: #ccc;
+            z-index: 10;
+            min-width: 180px;
+        }
+
+        .info-title {
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 2px 0;
+            line-height: 1.4;
+        }
+
+        .info-row span:first-child {
+            color: #888;
+        }
+
+        .info-row span:last-child {
+            color: #eee;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
         #canvas-container {
             flex: 1;
             position: relative;

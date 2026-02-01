@@ -32,5 +32,6 @@ export {
     createCameraMovementSystem,
     createPlanetRenderer,
     createPlanetRendererWebGL,
-    isWebGL2Available
+    isWebGL2Available,
+    type PickableRenderer
 } from './systems/index.js'

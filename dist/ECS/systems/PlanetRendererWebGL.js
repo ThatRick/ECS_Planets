@@ -403,11 +403,108 @@ export function createPlanetRendererWebGL(canvas) {
     };
     // Local file avoids CORS issues with NASA servers
     earthImg.src = 'earth-texture.png';
-    return {
+    // Last-frame canvas dimensions (for pick)
+    let lastWidth = 0;
+    let lastHeight = 0;
+    const renderer = {
         name: 'PlanetRendererWebGL',
         phase: 'visual',
+        selectedEntity: undefined,
+        pick(screenX, screenY, world) {
+            const w = lastWidth;
+            const h = lastHeight;
+            if (w === 0 || h === 0)
+                return undefined;
+            const bodies = world.query(Position, Size);
+            const EARTH_RADIUS_SQ_FACTOR = 0.97; // slightly inside surface to avoid edge misses
+            // Find Earth position + radius for occlusion test
+            let earthPx = 0, earthPy = 0, earthPz = 0, earthRadius = 0;
+            const earthEntities = world.query(Position, Size, EarthTag);
+            if (earthEntities.length > 0) {
+                const ep = world.getComponent(earthEntities[0], Position);
+                earthPx = ep.x;
+                earthPy = ep.y;
+                earthPz = ep.z;
+                earthRadius = world.getComponent(earthEntities[0], Size);
+            }
+            // Camera world position (reconstruct from view matrix inverse)
+            // viewMatrix is column-major: row 3 of columns 0-2 give -dot(axis, camPos)
+            // camPos = -(R^T * t) where R is the 3x3 and t is column 3
+            const cx = -(viewMatrix[0] * viewMatrix[12] + viewMatrix[1] * viewMatrix[13] + viewMatrix[2] * viewMatrix[14]);
+            const cy = -(viewMatrix[4] * viewMatrix[12] + viewMatrix[5] * viewMatrix[13] + viewMatrix[6] * viewMatrix[14]);
+            const cz = -(viewMatrix[8] * viewMatrix[12] + viewMatrix[9] * viewMatrix[13] + viewMatrix[10] * viewMatrix[14]);
+            let bestId;
+            let bestDistSq = Infinity;
+            const HIT_RADIUS_PX = 20;
+            for (let i = 0; i < bodies.length; i++) {
+                const id = bodies[i];
+                if (world.hasComponent(id, EarthTag))
+                    continue;
+                const size = world.getComponent(id, Size);
+                if (size <= 0)
+                    continue;
+                const pos = world.getComponent(id, Position);
+                // Project to clip space: clip = projMatrix * viewMatrix * pos
+                const vx = viewMatrix[0] * pos.x + viewMatrix[4] * pos.y + viewMatrix[8] * pos.z + viewMatrix[12];
+                const vy = viewMatrix[1] * pos.x + viewMatrix[5] * pos.y + viewMatrix[9] * pos.z + viewMatrix[13];
+                const vz = viewMatrix[2] * pos.x + viewMatrix[6] * pos.y + viewMatrix[10] * pos.z + viewMatrix[14];
+                const vw = viewMatrix[3] * pos.x + viewMatrix[7] * pos.y + viewMatrix[11] * pos.z + viewMatrix[15];
+                const clipX = projMatrix[0] * vx + projMatrix[4] * vy + projMatrix[8] * vz + projMatrix[12] * vw;
+                const clipY = projMatrix[1] * vx + projMatrix[5] * vy + projMatrix[9] * vz + projMatrix[13] * vw;
+                const clipW = projMatrix[3] * vx + projMatrix[7] * vy + projMatrix[11] * vz + projMatrix[15] * vw;
+                // Behind camera
+                if (clipW <= 0)
+                    continue;
+                const ndcX = clipX / clipW;
+                const ndcY = clipY / clipW;
+                const sx = (ndcX + 1) * 0.5 * w;
+                const sy = (1 - ndcY) * 0.5 * h;
+                const dx = sx - screenX;
+                const dy = sy - screenY;
+                const dSq = dx * dx + dy * dy;
+                if (dSq > HIT_RADIUS_PX * HIT_RADIUS_PX)
+                    continue;
+                // Occlusion: is the satellite behind the Earth?
+                if (earthRadius > 0) {
+                    // Vector from camera to satellite
+                    const toDirX = pos.x - cx;
+                    const toDirY = pos.y - cy;
+                    const toDirZ = pos.z - cz;
+                    // Vector from camera to earth center
+                    const toEarthX = earthPx - cx;
+                    const toEarthY = earthPy - cy;
+                    const toEarthZ = earthPz - cz;
+                    const satDist = Math.sqrt(toDirX * toDirX + toDirY * toDirY + toDirZ * toDirZ);
+                    const earthDist = Math.sqrt(toEarthX * toEarthX + toEarthY * toEarthY + toEarthZ * toEarthZ);
+                    // Only test occlusion if satellite is farther than Earth center
+                    if (satDist > earthDist) {
+                        // Project satellite onto line from camera to Earth center
+                        // Find closest approach of the camera→satellite ray to Earth center
+                        const rayDirX = toDirX / satDist;
+                        const rayDirY = toDirY / satDist;
+                        const rayDirZ = toDirZ / satDist;
+                        const dot = toEarthX * rayDirX + toEarthY * rayDirY + toEarthZ * rayDirZ;
+                        const perpX = toEarthX - dot * rayDirX;
+                        const perpY = toEarthY - dot * rayDirY;
+                        const perpZ = toEarthZ - dot * rayDirZ;
+                        const perpDistSq = perpX * perpX + perpY * perpY + perpZ * perpZ;
+                        if (perpDistSq < earthRadius * earthRadius * EARTH_RADIUS_SQ_FACTOR) {
+                            continue; // occluded by Earth
+                        }
+                    }
+                }
+                // Prefer the closest entity to the click; break ties by depth (closer to camera)
+                if (dSq < bestDistSq || (dSq === bestDistSq && clipW < Infinity)) {
+                    bestDistSq = dSq;
+                    bestId = id;
+                }
+            }
+            return bestId;
+        },
         update(world, _dt) {
             const { width, height } = canvas;
+            lastWidth = width;
+            lastHeight = height;
             // Handle canvas resize
             gl.viewport(0, 0, width, height);
             // Get camera
@@ -507,6 +604,8 @@ export function createPlanetRendererWebGL(canvas) {
                         continue;
                     const pos = world.getComponent(id, Position);
                     const size = world.getComponent(id, Size);
+                    if (size <= 0)
+                        continue;
                     const color = world.getComponent(id, Color);
                     const temp = world.getComponent(id, Temperature);
                     let r = 1, g = 1, b = 1;
@@ -542,6 +641,33 @@ export function createPlanetRendererWebGL(canvas) {
                     gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                     gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
                     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonEarthCount);
+                }
+                // Draw selection highlight ring (drawn after satellites, before Earth)
+                if (renderer.selectedEntity !== undefined && world.hasComponent(renderer.selectedEntity, Position)) {
+                    const selPos = world.getComponent(renderer.selectedEntity, Position);
+                    const selSize = world.getComponent(renderer.selectedEntity, Size);
+                    if (selSize !== undefined && selSize > 0) {
+                        // Ring: larger billboard with bright color, rendered with blending
+                        const ringScale = 4.0;
+                        instanceData[0] = selPos.x;
+                        instanceData[1] = selPos.y;
+                        instanceData[2] = selPos.z;
+                        instanceData[3] = selSize * ringScale;
+                        instanceData[4] = 1.0; // bright white
+                        instanceData[5] = 1.0;
+                        instanceData[6] = 1.0;
+                        gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+                        gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, INSTANCE_STRIDE));
+                        gl.useProgram(bodyProgram);
+                        gl.bindVertexArray(vaoBody);
+                        gl.uniform2f(bodyUniforms.resolution, width, height);
+                        gl.uniformMatrix4fv(bodyUniforms.viewMatrix, false, viewMatrix);
+                        gl.uniformMatrix4fv(bodyUniforms.projMatrix, false, projMatrix);
+                        gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
+                        gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
+                        gl.uniform1f(bodyUniforms.minPixelSize, 8.0); // ensure ring is visible
+                        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1);
+                    }
                 }
                 // Draw Earth-tagged bodies last (grid + user marker)
                 requestUserLocation();
@@ -692,6 +818,7 @@ export function createPlanetRendererWebGL(canvas) {
             gl.bindVertexArray(null);
         }
     };
+    return renderer;
 }
 /**
  * Compile a WebGL shader from source.
