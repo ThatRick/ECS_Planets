@@ -56,11 +56,9 @@ export class World {
     // ==================== Simulation Control ====================
     start() {
         this.ticker.start();
-        console.log('Simulation started');
     }
     stop() {
         this.ticker.stop();
-        console.log('Simulation stopped');
     }
     tickSimulation() {
         const dt = this.ticker.getDeltaTime();

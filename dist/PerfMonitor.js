@@ -9,6 +9,7 @@
  * - Entity count
  * - Detailed breakdown (gravity, collision, rendering)
  */
+import { enableDragging } from './Panel.js';
 export class PerfMonitor {
     frameCount = 0;
     simCount = 0;
@@ -341,6 +342,14 @@ export function createPerfOverlay() {
             </div>
         </div>
     `;
+    // Enable drag-to-move via header
+    const header = overlay.querySelector('.panel-header');
+    if (header) {
+        header.style.cursor = 'grab';
+        header.style.userSelect = 'none';
+        header.style.touchAction = 'none';
+        enableDragging(overlay, header);
+    }
     // Setup close button using querySelector on the overlay
     const closeBtn = overlay.querySelector('#perf-close');
     if (closeBtn) {

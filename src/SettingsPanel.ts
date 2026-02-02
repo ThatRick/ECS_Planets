@@ -4,6 +4,7 @@
  */
 
 import type { GravityType } from './types.js'
+import { enableDragging } from './Panel.js'
 
 export type VelocityMode = 'orbital' | 'collapse' | 'static'
 
@@ -324,6 +325,16 @@ export function createSettingsPanel(
             <div class="hint">Press S to toggle • Space to play/pause</div>
         </div>
     `
+
+    // Enable drag-to-move via header
+    const header = panel.querySelector('.panel-header') as HTMLElement
+    if (header) {
+        header.style.cursor = 'grab'
+        header.style.userSelect = 'none'
+        header.style.webkitUserSelect = 'none'
+        header.style.touchAction = 'none'
+        enableDragging(panel, header)
+    }
 
     // Setup event listeners
     const closeBtn = panel.querySelector('#settings-close')

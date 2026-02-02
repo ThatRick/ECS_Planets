@@ -197,26 +197,10 @@
             display: none !important;
         }
 
+        /* Starlink legend content styles (panel chrome handled by Panel.ts) */
         #starlink-legend {
-            position: fixed;
-            bottom: max(12px, env(safe-area-inset-bottom));
-            right: max(12px, env(safe-area-inset-right));
-            background: rgba(20, 20, 22, 0.85);
-            border: 1px solid #333;
-            border-radius: 8px;
-            padding: 10px 14px;
             font-size: 12px;
             color: #ccc;
-            z-index: 10;
-        }
-
-        .legend-title {
-            font-weight: 600;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #888;
-            margin-bottom: 6px;
         }
 
         .legend-entry {
@@ -250,27 +234,10 @@
             flex-shrink: 0;
         }
 
+        /* Satellite info content styles (panel chrome handled by Panel.ts) */
         #satellite-info {
-            position: fixed;
-            bottom: max(12px, env(safe-area-inset-bottom));
-            left: max(12px, env(safe-area-inset-left));
-            background: rgba(20, 20, 22, 0.9);
-            border: 1px solid #444;
-            border-radius: 8px;
-            padding: 10px 14px;
             font-size: 12px;
             color: #ccc;
-            z-index: 10;
-            min-width: 180px;
-        }
-
-        .info-title {
-            font-weight: 600;
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #888;
-            margin-bottom: 6px;
         }
 
         .info-row {
@@ -378,6 +345,7 @@
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
             <button id="perfBtn" class="icon-btn" title="Performance stats">&#9776;</button>
+            <button id="logBtn" class="icon-btn" title="Application log (L)">&#9112;</button>
             <select id="sceneSelect" class="scene-select" title="Scene">
                 <option value="proto-planets">Proto planets</option>
                 <option value="starlinks">Starlinks</option>

@@ -1,6 +1,7 @@
 import { System } from '../System.js'
 import { World } from '../World.js'
 import { Position, Size, Color, Temperature, CameraComponent, EarthTag } from '../Components.js'
+import { AppLog } from '../../AppLog.js'
 
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
@@ -425,7 +426,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 hasUserLocation = 1
             },
             (err) => {
-                console.warn('User location unavailable:', err)
+                AppLog.warn('User location unavailable: ' + err)
             },
             { enableHighAccuracy: false, maximumAge: 60_000, timeout: 10_000 }
         )
@@ -439,23 +440,27 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
         new Uint8Array([30, 90, 240, 255]))
 
-    const earthImg = new Image()
-    earthImg.onload = () => {
-        gl.bindTexture(gl.TEXTURE_2D, earthTexture)
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, earthImg)
-        gl.generateMipmap(gl.TEXTURE_2D)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-        earthTextureReady = true
-        console.log('Earth texture loaded')
-    }
-    earthImg.onerror = () => {
-        console.warn('Failed to load Earth texture; using solid color fallback')
-    }
-    // Local file avoids CORS issues with NASA servers
-    earthImg.src = 'earth-texture.png'
+    // Load texture via fetch + createImageBitmap for better error reporting and reliability
+    fetch('earth-texture.png')
+        .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+            return res.blob()
+        })
+        .then(blob => createImageBitmap(blob))
+        .then(bitmap => {
+            gl.bindTexture(gl.TEXTURE_2D, earthTexture)
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap)
+            gl.generateMipmap(gl.TEXTURE_2D)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR)
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+            earthTextureReady = true
+            AppLog.info('Earth texture loaded')
+        })
+        .catch(err => {
+            AppLog.warn('Failed to load Earth texture: ' + err)
+        })
 
     // Last-frame canvas dimensions (for pick)
     let lastWidth = 0

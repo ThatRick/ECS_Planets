@@ -2,6 +2,7 @@
  * Settings Panel for simulation configuration
  * Toggle with 'S' key or settings button
  */
+import { enableDragging } from './Panel.js';
 export const DEFAULT_SETTINGS = {
     bodyCount: 300,
     radiusMin: 10, // 10 km
@@ -300,6 +301,15 @@ export function createSettingsPanel(onApply, onGravityChange) {
             <div class="hint">Press S to toggle • Space to play/pause</div>
         </div>
     `;
+    // Enable drag-to-move via header
+    const header = panel.querySelector('.panel-header');
+    if (header) {
+        header.style.cursor = 'grab';
+        header.style.userSelect = 'none';
+        header.style.webkitUserSelect = 'none';
+        header.style.touchAction = 'none';
+        enableDragging(panel, header);
+    }
     // Setup event listeners
     const closeBtn = panel.querySelector('#settings-close');
     if (closeBtn) {

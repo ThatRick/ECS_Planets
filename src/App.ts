@@ -25,6 +25,8 @@ import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } 
 import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode, setGravityAlgoValue } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 import type { StarlinkOrbitStatusCode } from './data/starlinkStatus.js'
+import { AppLog, createLogPanel } from './AppLog.js'
+import { createPanel, enableDragging, type PanelHandle } from './Panel.js'
 
 export type GravityType = 'simple' | 'barnes-hut'
 export type RendererType = 'webgl' | 'canvas'
@@ -62,9 +64,11 @@ export default class App {
     private satelliteNoradMap: Map<number, number> = new Map()   // entity ID → NORAD ID
     private satSizeM: number = 30_000
     private selectedEntity: number | undefined
-    private infoPanel: HTMLElement | null = null
+    private infoPanel: PanelHandle | null = null
+    private logPanel: PanelHandle
 
     constructor(canvas: HTMLCanvasElement) {
+        AppLog.info('App initialization started')
         this.canvas = canvas
         this.bodyCountEl = document.getElementById('bodyCount')
         this.sceneNameEl = document.getElementById('sceneName')
@@ -94,7 +98,11 @@ export default class App {
 
         // Add satellite info panel (hidden by default)
         this.infoPanel = this.createInfoPanel()
-        document.body.appendChild(this.infoPanel)
+        document.body.appendChild(this.infoPanel.element)
+
+        // Add log panel (hidden by default)
+        this.logPanel = createLogPanel()
+        document.body.appendChild(this.logPanel.element)
 
         // Click-to-select satellite detection
         this.setupClickSelection()
@@ -113,9 +121,9 @@ export default class App {
         if (isWebGL2Available()) {
             this.sharedRendererSystem = createPlanetRendererWebGL(this.canvas)
             this.currentRenderer = 'webgl'
-            console.log('Using WebGL 2 renderer (3D)')
+            AppLog.info('Using WebGL 2 renderer (3D)')
         } else {
-            console.warn('WebGL 2 not available - falling back to Canvas 2D renderer')
+            AppLog.warn('WebGL 2 not available - falling back to Canvas 2D renderer')
             this.sharedRendererSystem = createPlanetRenderer(this.canvas)
             this.currentRenderer = 'canvas'
         }
@@ -129,6 +137,7 @@ export default class App {
         this.perfMonitor.reset()
         this.bindControls()
         this.updateStarlinksTimeUiVisibility()
+        AppLog.info('App initialization complete')
 
         // Main render loop
         const loop = () => {
@@ -163,7 +172,7 @@ export default class App {
         this.world.registerSystem(newSystem)
         this.currentGravityType = type
 
-        console.log(`Switched to ${type} gravity system`)
+        AppLog.info(`Switched to ${type} gravity system`)
         this.perfMonitor.reset()
     }
 
@@ -313,7 +322,7 @@ export default class App {
 
         this.updateBodyCount()
         this.perfMonitor.reset()
-        console.log(`Reset: ${settings.bodyCount} bodies, mode=${settings.velocityMode}, scale=${settings.velocityScale}`)
+        AppLog.info(`Reset: ${settings.bodyCount} bodies, mode=${settings.velocityMode}, scale=${settings.velocityScale}`)
     }
 
     private updateRendererBadge(): void {
@@ -332,9 +341,17 @@ export default class App {
     }
 
     private createStarlinkLegend(): HTMLElement {
-        const legend = document.createElement('div')
-        legend.id = 'starlink-legend'
-        legend.className = 'hidden'
+        const panel = createPanel({
+            id: 'starlink-legend',
+            title: 'Satellite Status',
+            startHidden: true,
+            closable: false,
+            position: {
+                bottom: 'max(12px, env(safe-area-inset-bottom))',
+                right: 'max(12px, env(safe-area-inset-right))'
+            },
+            zIndex: 10
+        })
 
         const entries: [string, string, Vec3][] = [
             ['O', 'Operational', STARLINK_STATUS_COLORS.O],
@@ -351,7 +368,7 @@ export default class App {
             ['G', 'Graveyard', STARLINK_STATUS_COLORS.G],
         ]
 
-        let html = '<div class="legend-title">Satellite Status</div>'
+        let html = ''
         for (const [code, label, color] of entries) {
             const r = Math.round(color.x * 255)
             const g = Math.round(color.y * 255)
@@ -359,10 +376,10 @@ export default class App {
             html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</label>`
         }
 
-        legend.innerHTML = html
+        panel.content.innerHTML = html
 
         // Wire up checkbox filtering
-        legend.addEventListener('change', (e) => {
+        panel.content.addEventListener('change', (e) => {
             const target = e.target as HTMLInputElement
             if (target.type !== 'checkbox') return
             const code = target.dataset.status
@@ -370,7 +387,7 @@ export default class App {
             this.toggleStatusVisibility(code, target.checked)
         })
 
-        return legend
+        return panel.element
     }
 
     private toggleStatusVisibility(statusCode: string, visible: boolean): void {
@@ -382,11 +399,18 @@ export default class App {
         }
     }
 
-    private createInfoPanel(): HTMLElement {
-        const panel = document.createElement('div')
-        panel.id = 'satellite-info'
-        panel.className = 'hidden'
-        return panel
+    private createInfoPanel(): PanelHandle {
+        return createPanel({
+            id: 'satellite-info',
+            title: 'Satellite Info',
+            startHidden: true,
+            position: {
+                bottom: 'max(12px, env(safe-area-inset-bottom))',
+                left: 'max(12px, env(safe-area-inset-left))'
+            },
+            zIndex: 10,
+            minWidth: '180px'
+        })
     }
 
     private setupClickSelection(): void {
@@ -433,7 +457,7 @@ export default class App {
 
         const EARTH_RADIUS_KM = 6371
 
-        let html = '<div class="info-title">Satellite Info</div>'
+        let html = ''
         if (noradId) {
             html += `<div class="info-row"><span>NORAD ID</span><span>${noradId}</span></div>`
         }
@@ -456,15 +480,15 @@ export default class App {
             html += `<div class="info-row"><span>Eccentricity</span><span>${orbit.eccentricity.toFixed(4)}</span></div>`
         }
 
-        this.infoPanel.innerHTML = html
-        this.infoPanel.classList.remove('hidden')
+        this.infoPanel.content.innerHTML = html
+        this.infoPanel.show()
     }
 
     private clearSelection(): void {
         this.selectedEntity = undefined
         const renderer = this.sharedRendererSystem as PickableRenderer | null
         if (renderer) renderer.selectedEntity = undefined
-        this.infoPanel?.classList.add('hidden')
+        this.infoPanel?.hide()
     }
 
     private updateStarlinksTimeUi(): void {
@@ -491,9 +515,11 @@ export default class App {
         if (this.isRunning) {
             this.world.stop()
             this.isRunning = false
+            AppLog.info('Simulation paused')
         } else {
             this.world.start()
             this.isRunning = true
+            AppLog.info('Simulation started')
         }
         this.updatePlayPauseButton()
     }
@@ -593,7 +619,7 @@ export default class App {
         updateSettingsPanelValues(config)
         setGravityAlgoValue(this.currentGravityType)
 
-        console.log(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`)
+        AppLog.info(`Created ${config.bodyCount} planets (${config.velocityMode} mode) in 3D`)
     }
 
     private async setupStarlinks(world: World): Promise<void> {
@@ -664,7 +690,7 @@ export default class App {
                 created++
             }
         } catch (err) {
-            console.warn('Failed to load live Starlink data; falling back to synthetic orbits.', err)
+            AppLog.warn('Failed to load live Starlink data; falling back to synthetic orbits.')
 
             // Fallback: synthetic shell
             for (let i = 0; i < Math.min(800, MAX_SATELLITES); i++) {
@@ -711,11 +737,12 @@ export default class App {
             world.registerSystem(this.sharedRendererSystem)
         }
 
-        console.log(`Starlinks scene loaded (${created} satellites)`)
+        AppLog.info(`Starlinks scene loaded (${created} satellites)`)
     }
 
     async loadScene(scene: SceneId): Promise<void> {
         if (scene === this.currentScene) return
+        AppLog.info(`Loading scene: ${scene}`)
 
         const wasRunning = this.isRunning
         if (this.isRunning) {
@@ -836,6 +863,14 @@ export default class App {
             })
         }
 
+        // Log button
+        const logBtn = document.getElementById('logBtn')
+        if (logBtn) {
+            logBtn.addEventListener('click', () => {
+                this.logPanel.toggle()
+            })
+        }
+
         // Scene loader
         const loadSceneBtn = document.getElementById('loadSceneBtn')
         const sceneSelect = document.getElementById('sceneSelect') as HTMLSelectElement | null
@@ -862,6 +897,9 @@ export default class App {
                     break
                 case 'p':
                     togglePerfOverlay()
+                    break
+                case 'l':
+                    this.logPanel.toggle()
                     break
             }
         })
@@ -907,6 +945,18 @@ type TleApiTleRecord = {
     line2?: string
 }
 
+type CelestrakGPRecord = {
+    OBJECT_NAME?: string
+    NORAD_CAT_ID?: number
+    EPOCH?: string
+    MEAN_MOTION?: number
+    ECCENTRICITY?: number
+    INCLINATION?: number
+    RA_OF_ASC_NODE?: number
+    ARG_OF_PERICENTER?: number
+    MEAN_ANOMALY?: number
+}
+
 type ParsedOrbit = {
     noradId: number
     semiMajorAxis: number
@@ -919,7 +969,7 @@ type ParsedOrbit = {
     argPeriapsisRad: number
 }
 
-const STARLINK_CACHE_KEY = 'starlink_orbits_v1'
+const STARLINK_CACHE_KEY = 'starlink_orbits_v2'
 const STARLINK_CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000 // 12 hours
 
 function getCachedOrbits(): ParsedOrbit[] | null {
@@ -947,17 +997,29 @@ async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<Parsed
     // Return cached data immediately if fresh enough
     const cached = getCachedOrbits()
     if (cached) {
-        console.log(`Using cached Starlink data (${cached.length} orbits)`)
+        AppLog.info(`Using cached Starlink data (${cached.length} orbits)`)
         return cached.slice(0, max)
     }
 
     let orbits: ParsedOrbit[] = []
+
+    // Try CelesTrak first (single request, most complete ~9500 satellites)
     try {
-        orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
+        orbits = await fetchStarlinkOrbitsFromCelestrak(muEarth, max)
     } catch (err) {
-        console.warn('TLE API fetch failed; falling back to SpaceX API.', err)
+        AppLog.warn('CelesTrak fetch failed; falling back to TLE API.')
     }
 
+    // Fallback to TLE API (paginated)
+    if (orbits.length === 0) {
+        try {
+            orbits = await fetchStarlinkOrbitsFromTleApi(muEarth, max)
+        } catch (err) {
+            AppLog.warn('TLE API fetch failed; falling back to SpaceX API.')
+        }
+    }
+
+    // Last resort: SpaceX API
     if (orbits.length === 0) {
         const starlinks = await fetchStarlinks()
         orbits = starlinks
@@ -973,7 +1035,7 @@ async function fetchStarlinkOrbits(muEarth: number, max: number): Promise<Parsed
 }
 
 async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Promise<ParsedOrbit[]> {
-    const pageSize = 500
+    const pageSize = 100  // API maximum is 100
     const maxPages = Math.ceil(max / pageSize)
 
     // Fetch first page to verify the API is reachable and discover total results
@@ -1029,6 +1091,62 @@ async function fetchStarlinkOrbitsFromTleApi(muEarth: number, max: number): Prom
     }
 
     return results
+}
+
+async function fetchStarlinkOrbitsFromCelestrak(muEarth: number, max: number): Promise<ParsedOrbit[]> {
+    const url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=starlink&FORMAT=json'
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`CelesTrak request failed: ${res.status} ${res.statusText}`)
+    const data = (await res.json()) as CelestrakGPRecord[]
+    if (!Array.isArray(data)) throw new Error('Unexpected CelesTrak response format')
+
+    const results: ParsedOrbit[] = []
+    for (const rec of data) {
+        if (results.length >= max) break
+        const orbit = parseCelestrakRecord(rec, muEarth)
+        if (orbit) results.push(orbit)
+    }
+    return results
+}
+
+function parseCelestrakRecord(rec: CelestrakGPRecord, muEarth: number): ParsedOrbit | null {
+    const noradId = rec.NORAD_CAT_ID
+    if (!noradId || noradId <= 0) return null
+
+    const meanMotionRevPerDay = rec.MEAN_MOTION
+    const eccentricity = rec.ECCENTRICITY
+    const inclinationDeg = rec.INCLINATION
+    const raanDeg = rec.RA_OF_ASC_NODE
+    const argPeriDeg = rec.ARG_OF_PERICENTER
+    const meanAnomalyDeg = rec.MEAN_ANOMALY
+
+    if (
+        !Number.isFinite(meanMotionRevPerDay) || meanMotionRevPerDay! <= 0 ||
+        !Number.isFinite(eccentricity) ||
+        !Number.isFinite(inclinationDeg) ||
+        !Number.isFinite(raanDeg) ||
+        !Number.isFinite(argPeriDeg) ||
+        !Number.isFinite(meanAnomalyDeg)
+    ) return null
+
+    const epochMs = rec.EPOCH ? Date.parse(rec.EPOCH) : NaN
+    if (!Number.isFinite(epochMs)) return null
+
+    const meanMotionRadPerSec = (meanMotionRevPerDay! * Math.PI * 2) / 86400
+    const semiMajorAxis = Math.cbrt(muEarth / (meanMotionRadPerSec * meanMotionRadPerSec))
+    if (!Number.isFinite(semiMajorAxis) || semiMajorAxis <= 0) return null
+
+    return {
+        noradId,
+        semiMajorAxis,
+        eccentricity: Math.max(0, Math.min(0.99, eccentricity!)),
+        meanMotionRadPerSec,
+        epochMs,
+        meanAnomalyAtEpoch: wrapAngleRad(degToRad(meanAnomalyDeg!)),
+        inclinationRad: degToRad(inclinationDeg!),
+        raanRad: degToRad(raanDeg!),
+        argPeriapsisRad: degToRad(argPeriDeg!)
+    }
 }
 
 async function fetchStarlinks(): Promise<SpaceXStarlinkRecord[]> {

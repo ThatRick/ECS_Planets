@@ -94,12 +94,10 @@ export class World {
 
     start(): void {
         this.ticker.start()
-        console.log('Simulation started')
     }
 
     stop(): void {
         this.ticker.stop()
-        console.log('Simulation stopped')
     }
 
     private tickSimulation(): void {
