@@ -44,6 +44,7 @@ jobs:
           rm -rf site
           mkdir -p site
           cp index.html site/
+          cp earth-texture.png site/
           cp -R dist site/dist
 
       - name: Setup Pages
