@@ -26,6 +26,7 @@ import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPa
 import { System } from './ECS/System.js'
 import type { StarlinkOrbitStatusCode } from './data/starlinkStatus.js'
 import { AppLog, createLogPanel } from './AppLog.js'
+import { computeSunDirWorld, isInEarthShadow } from './lib/solar.js'
 import { createPanel, enableDragging, type PanelHandle } from './Panel.js'
 
 export type GravityType = 'simple' | 'barnes-hut'
@@ -338,6 +339,8 @@ export default class App {
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks)
         this.nowBtn?.classList.toggle('hidden', !isStarlinks)
         this.legendEl?.classList.toggle('hidden', !isStarlinks)
+        const sunlightBtn = document.getElementById('sunlightBtn')
+        sunlightBtn?.classList.toggle('hidden', !isStarlinks)
     }
 
     private createStarlinkLegend(): HTMLElement {
@@ -478,6 +481,23 @@ export default class App {
             html += `<div class="info-row"><span>Inclination</span><span>${inclDeg.toFixed(1)}°</span></div>`
             html += `<div class="info-row"><span>Period</span><span>${periodMin.toFixed(1)} min</span></div>`
             html += `<div class="info-row"><span>Eccentricity</span><span>${orbit.eccentricity.toFixed(4)}</span></div>`
+        }
+
+        // Show sunlit status when sunlight mode is active
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (renderer?.sunlightMode) {
+            const pos = this.world.getComponent(entityId, Position)
+            if (pos) {
+                const EARTH_RADIUS_M = 6_371_000
+                const sunDir = new Float32Array(3)
+                computeSunDirWorld(this.world.simTimeMs, sunDir)
+                const shadowed = isInEarthShadow(
+                    pos.x, pos.y, pos.z,
+                    sunDir[0], sunDir[1], sunDir[2],
+                    EARTH_RADIUS_M
+                )
+                html += `<div class="info-row"><span>Sunlit</span><span>${shadowed ? 'No (shadow)' : 'Yes'}</span></div>`
+            }
         }
 
         this.infoPanel.content.innerHTML = html
@@ -760,6 +780,13 @@ export default class App {
         }
 
         this.clearSelection()
+
+        // Reset sunlight mode
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (renderer) renderer.sunlightMode = false
+        const sunlightBtn = document.getElementById('sunlightBtn')
+        sunlightBtn?.classList.remove('sunlight-active')
+
         const newWorld = new World(scene === 'proto-planets' ? 100 : 60)
         try {
             if (scene === 'proto-planets') {
@@ -845,6 +872,17 @@ export default class App {
         const nowBtn = document.getElementById('nowButton')
         if (nowBtn) {
             nowBtn.addEventListener('click', () => this.jumpStarlinksToNow())
+        }
+
+        // Sunlight mode toggle
+        const sunlightBtn = document.getElementById('sunlightBtn')
+        if (sunlightBtn) {
+            sunlightBtn.addEventListener('click', () => {
+                const renderer = this.sharedRendererSystem as PickableRenderer | null
+                if (!renderer) return
+                renderer.sunlightMode = !renderer.sunlightMode
+                sunlightBtn.classList.toggle('sunlight-active', renderer.sunlightMode)
+            })
         }
 
         // Settings button

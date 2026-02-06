@@ -193,6 +193,15 @@
             color: #fc8;
         }
 
+        button.sunlight-active {
+            background: #7a6a2a;
+            color: #ffd;
+        }
+
+        button.sunlight-active:hover {
+            background: #9a8a3a;
+        }
+
         .hidden {
             display: none !important;
         }
@@ -342,6 +351,7 @@
                 <span class="time-factor"><span id="timeFactor">100</span>x</span>
                 <button id="fasterButton" title="Faster (2x)">+</button>
                 <button id="nowButton" class="hidden" title="Jump Starlinks time to now">Now</button>
+                <button id="sunlightBtn" class="hidden" title="Toggle sunlight/shadow visualization">&#9728;</button>
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
             <button id="perfBtn" class="icon-btn" title="Performance stats">&#9776;</button>

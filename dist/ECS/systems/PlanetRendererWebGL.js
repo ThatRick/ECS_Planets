@@ -1,5 +1,6 @@
 import { Position, Size, Color, Temperature, CameraComponent, EarthTag } from '../Components.js';
 import { AppLog } from '../../AppLog.js';
+import { computeSunDirWorld, isInEarthShadow } from '../../lib/solar.js';
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -114,6 +115,9 @@ uniform float u_hasUserLocation;  // 0 or 1
 uniform sampler2D u_earthTexture;
 uniform float u_hasTexture;       // 0 or 1
 
+uniform vec3 u_sunDirWorld;       // unit vector Earth->Sun (world space)
+uniform float u_sunlightMode;    // 0 or 1
+
 out vec4 fragColor;
 
 const float PI = 3.14159265359;
@@ -137,9 +141,26 @@ void main() {
     float z = sqrt(1.0 - distSq);
     vec3 normalLocal = normalize(vec3(v_uv, z));
 
-    // Lighting factors (computed before choosing base color)
-    vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
-    float ambient = 0.28;
+    // Lighting: choose between fixed view-space light and sun-based world-space light.
+    vec3 lightDir;
+    float ambient;
+    float diffuseScale;
+
+    if (u_sunlightMode > 0.5) {
+        // Transform sun direction from world space to local (billboard) space
+        lightDir = normalize(vec3(
+            dot(u_sunDirWorld, u_cameraRight),
+            dot(u_sunDirWorld, u_cameraUp),
+            dot(u_sunDirWorld, u_cameraForward)
+        ));
+        ambient = 0.02;
+        diffuseScale = 0.98;
+    } else {
+        lightDir = normalize(vec3(0.35, 0.25, 1.0));
+        ambient = 0.28;
+        diffuseScale = 0.72;
+    }
+
     float diffuse = max(dot(normalLocal, lightDir), 0.0);
 
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
@@ -166,7 +187,7 @@ void main() {
     }
 
     // Apply lighting to base color
-    vec3 col = baseColor * (ambient + diffuse * 0.72);
+    vec3 col = baseColor * (ambient + diffuse * diffuseScale);
     col += spec * 0.15;
 
     float latStep = radians(15.0);
@@ -292,7 +313,9 @@ export function createPlanetRendererWebGL(canvas) {
         userDirWorld: gl.getUniformLocation(earthProgram, 'u_userDirWorld'),
         hasUserLocation: gl.getUniformLocation(earthProgram, 'u_hasUserLocation'),
         earthTexture: gl.getUniformLocation(earthProgram, 'u_earthTexture'),
-        hasTexture: gl.getUniformLocation(earthProgram, 'u_hasTexture')
+        hasTexture: gl.getUniformLocation(earthProgram, 'u_hasTexture'),
+        sunDirWorld: gl.getUniformLocation(earthProgram, 'u_sunDirWorld'),
+        sunlightMode: gl.getUniformLocation(earthProgram, 'u_sunlightMode')
     };
     // Create unit quad geometry (two triangles forming a square from -1 to 1)
     const quadVertices = new Float32Array([
@@ -357,6 +380,9 @@ export function createPlanetRendererWebGL(canvas) {
     // Enable depth testing for proper 3D ordering
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
+    // Sunlight mode state
+    let sunlightModeEnabled = false;
+    const sunDirWorld = new Float32Array([1, 0, 0]);
     // Optional user-location marker (requested only when an Earth-tagged body exists)
     let userLocationRequested = false;
     let hasUserLocation = 0;
@@ -416,6 +442,8 @@ export function createPlanetRendererWebGL(canvas) {
         name: 'PlanetRendererWebGL',
         phase: 'visual',
         selectedEntity: undefined,
+        get sunlightMode() { return sunlightModeEnabled; },
+        set sunlightMode(v) { sunlightModeEnabled = v; },
         pick(screenX, screenY, world) {
             const w = lastWidth;
             const h = lastHeight;
@@ -602,6 +630,14 @@ export function createPlanetRendererWebGL(canvas) {
             // If an Earth-tagged body exists, render it last with the Earth shader (grid + marker),
             // so satellites fade cleanly at the horizon (no black alpha-edge halo).
             if (earthCount > 0) {
+                // Compute sun direction and earth radius for shadow testing
+                let shadowEarthRadius = 0;
+                if (sunlightModeEnabled) {
+                    computeSunDirWorld(world.simTimeMs, sunDirWorld);
+                    if (earthEntities.length > 0) {
+                        shadowEarthRadius = world.getComponent(earthEntities[0], Size) ?? 0;
+                    }
+                }
                 // Draw non-Earth bodies first
                 let offset = 0;
                 for (let i = 0; i < bodyCount; i++) {
@@ -625,6 +661,15 @@ export function createPlanetRendererWebGL(canvas) {
                         r = tmpRgb[0];
                         g = tmpRgb[1];
                         b = tmpRgb[2];
+                    }
+                    // Shadow test: dim satellites in Earth's shadow
+                    if (sunlightModeEnabled && shadowEarthRadius > 0) {
+                        if (isInEarthShadow(pos.x, pos.y, pos.z, sunDirWorld[0], sunDirWorld[1], sunDirWorld[2], shadowEarthRadius)) {
+                            const shadowFactor = 0.08;
+                            r *= shadowFactor;
+                            g *= shadowFactor;
+                            b *= shadowFactor;
+                        }
                     }
                     instanceData[offset++] = pos.x;
                     instanceData[offset++] = pos.y;
@@ -717,6 +762,9 @@ export function createPlanetRendererWebGL(canvas) {
                 gl.uniform1f(earthUniforms.minPixelSize, minPixelSize);
                 gl.uniform3f(earthUniforms.userDirWorld, userDirWorld[0], userDirWorld[1], userDirWorld[2]);
                 gl.uniform1f(earthUniforms.hasUserLocation, hasUserLocation);
+                // Sunlight mode uniforms
+                gl.uniform3f(earthUniforms.sunDirWorld, sunDirWorld[0], sunDirWorld[1], sunDirWorld[2]);
+                gl.uniform1f(earthUniforms.sunlightMode, sunlightModeEnabled ? 1.0 : 0.0);
                 // Bind earth texture
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, earthTexture);
