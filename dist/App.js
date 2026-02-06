@@ -836,6 +836,11 @@ export default class App {
         this.world.updateVisuals();
         this.perfMonitor.renderEnd();
         this.updateStarlinksTimeUi();
+        if (this.currentScene === 'starlinks' &&
+            this.selectedEntity !== undefined &&
+            this.infoPanel?.isVisible()) {
+            this.updateInfoPanel(this.selectedEntity);
+        }
         const entityCount = this.world.query(Position, Size).length;
         this.perfMonitor.frameEnd(entityCount);
     }

@@ -9,10 +9,11 @@
  */
 
 const DEG_TO_RAD = Math.PI / 180
+const TWO_PI = Math.PI * 2
 
 /**
- * Compute a unit vector pointing from Earth to the Sun in the app's
- * Y-up world coordinate system.
+ * Compute a unit vector pointing from Earth to the Sun in the app's inertial
+ * Y-up world coordinate system (ECI-like frame).
  *
  * The coordinate mapping matches OrbitSystem: x = xEci, y = zEci, z = yEci.
  *
@@ -62,6 +63,61 @@ export function computeSunDirWorld(utcMs: number, out: Float32Array): void {
 }
 
 /**
+ * Greenwich mean sidereal angle in radians (0..2π).
+ * This is the Earth rotation angle used to map inertial vectors into
+ * Earth-fixed coordinates.
+ */
+export function greenwichSiderealAngleRad(utcMs: number): number {
+    const JD = utcMs / 86_400_000 + 2_440_587.5
+    const T = (JD - 2_451_545.0) / 36525
+    const gmstDeg =
+        280.46061837 +
+        360.98564736629 * (JD - 2_451_545.0) +
+        0.000387933 * T * T -
+        (T * T * T) / 38_710_000
+    let gmstRad = gmstDeg * DEG_TO_RAD
+    gmstRad %= TWO_PI
+    if (gmstRad < 0) gmstRad += TWO_PI
+    return gmstRad
+}
+
+/**
+ * Rotate a world-space inertial vector into Earth-fixed world coordinates.
+ * Rotation axis is world +Y (Earth's spin axis in this app's coordinate map).
+ */
+export function inertialToEarthFixedWorld(
+    utcMs: number,
+    inX: number, inY: number, inZ: number,
+    out: Float32Array
+): void {
+    const theta = greenwichSiderealAngleRad(utcMs)
+    const c = Math.cos(theta)
+    const s = Math.sin(theta)
+
+    out[0] = c * inX + s * inZ
+    out[1] = inY
+    out[2] = -s * inX + c * inZ
+}
+
+/**
+ * Rotate a world-space Earth-fixed vector into inertial world coordinates.
+ * This is the inverse of inertialToEarthFixedWorld().
+ */
+export function earthFixedToInertialWorld(
+    utcMs: number,
+    inX: number, inY: number, inZ: number,
+    out: Float32Array
+): void {
+    const theta = greenwichSiderealAngleRad(utcMs)
+    const c = Math.cos(theta)
+    const s = Math.sin(theta)
+
+    out[0] = c * inX - s * inZ
+    out[1] = inY
+    out[2] = s * inX + c * inZ
+}
+
+/**
  * Compute the elevation angle (radians) of a satellite above the observer's
  * local horizon.
  *
@@ -107,18 +163,62 @@ export function isInEarthShadow(
     sunDirX: number, sunDirY: number, sunDirZ: number,
     earthRadius: number
 ): boolean {
-    // Dot product of satellite position with sun direction.
-    // If positive, satellite is on the sunlit side of Earth.
-    const dot = satX * sunDirX + satY * sunDirY + satZ * sunDirZ
-    if (dot >= 0) return false
+    return earthShadowSignedDistance(
+        satX, satY, satZ,
+        sunDirX, sunDirY, sunDirZ,
+        earthRadius
+    ) < 0
+}
 
-    // Satellite is on the dark side. Check if within shadow cylinder.
-    // Perpendicular distance squared from the Earth-Sun axis:
-    // |satPos x sunDir|^2
+/**
+ * Signed distance (meters) to the boundary of the cylindrical Earth shadow model.
+ * Negative = inside shadow, positive = sunlit side.
+ */
+export function earthShadowSignedDistance(
+    satX: number, satY: number, satZ: number,
+    sunDirX: number, sunDirY: number, sunDirZ: number,
+    earthRadius: number
+): number {
+    // Half-space split at the terminator plane (dot = 0).
+    // Positive values are on the sunlit side.
+    const dot = satX * sunDirX + satY * sunDirY + satZ * sunDirZ
+
+    // Distance from Earth-Sun axis minus radius (cylindrical umbra wall).
     const cx = satY * sunDirZ - satZ * sunDirY
     const cy = satZ * sunDirX - satX * sunDirZ
     const cz = satX * sunDirY - satY * sunDirX
-    const perpDistSq = cx * cx + cy * cy + cz * cz
+    const perpDist = Math.sqrt(cx * cx + cy * cy + cz * cz)
+    const cylinderDist = perpDist - earthRadius
 
-    return perpDistSq < earthRadius * earthRadius
+    // Shadow region is intersection: dot < 0 and cylinderDist < 0.
+    // For intersection SDF approximation, use max().
+    return Math.max(dot, cylinderDist)
+}
+
+/**
+ * Sunlit amount as byte 0..255 using a smooth transition around shadow boundary.
+ *
+ * @param transitionDistanceMeters  Full blend span in meters.
+ *                                  A value equal to one second of orbital travel
+ *                                  yields about one second color transition.
+ */
+export function sunlitByteFromEarthShadow(
+    satX: number, satY: number, satZ: number,
+    sunDirX: number, sunDirY: number, sunDirZ: number,
+    earthRadius: number,
+    transitionDistanceMeters: number
+): number {
+    const signedDist = earthShadowSignedDistance(
+        satX, satY, satZ,
+        sunDirX, sunDirY, sunDirZ,
+        earthRadius
+    )
+    const halfWidth = Math.max(transitionDistanceMeters * 0.5, 0.5)
+    const linear = clamp01((signedDist + halfWidth) / (2 * halfWidth))
+    const smooth = linear * linear * (3 - 2 * linear)
+    return Math.round(smooth * 255)
+}
+
+function clamp01(x: number): number {
+    return Math.max(0, Math.min(1, x))
 }

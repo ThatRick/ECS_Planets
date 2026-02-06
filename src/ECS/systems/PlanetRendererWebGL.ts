@@ -1,8 +1,14 @@
 import { System } from '../System.js'
 import { World } from '../World.js'
-import { Position, Size, Color, Temperature, CameraComponent, EarthTag } from '../Components.js'
+import { Position, Size, Color, Temperature, CameraComponent, EarthTag, Orbit } from '../Components.js'
 import { AppLog } from '../../AppLog.js'
-import { computeSunDirWorld, isInEarthShadow, satelliteElevation } from '../../lib/solar.js'
+import {
+    computeSunDirWorld,
+    earthFixedToInertialWorld,
+    greenwichSiderealAngleRad,
+    satelliteElevation,
+    sunlitByteFromEarthShadow
+} from '../../lib/solar.js'
 
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
@@ -134,6 +140,7 @@ uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
 uniform vec3 u_cameraForward;
 uniform mat4 u_projMatrix;
+uniform float u_earthRotationRad; // inertial->earth-fixed rotation angle
 
 uniform vec3 u_userDirWorld;      // normalized
 uniform float u_hasUserLocation;  // 0 or 1
@@ -186,15 +193,24 @@ void main() {
     float ndcDepth = clip.z / clip.w;
     gl_FragDepth = ndcDepth * 0.5 + 0.5;
 
-    // Map the visible hemisphere to world directions so the grid is anchored to world axes.
+    // Inertial normal (used for physical lighting with inertial sun vector).
     vec3 normalWorld = normalize(
         u_cameraRight * normalView.x +
         u_cameraUp * normalView.y +
         u_cameraForward * normalView.z
     );
 
-    float lat = asin(clamp(normalWorld.y, -1.0, 1.0));
-    float lon = atan(normalWorld.z, normalWorld.x);
+    // Earth-fixed normal (used for texture/grid/user marker so they rotate with time).
+    float cRot = cos(u_earthRotationRad);
+    float sRot = sin(u_earthRotationRad);
+    vec3 normalEarth = vec3(
+        cRot * normalWorld.x + sRot * normalWorld.z,
+        normalWorld.y,
+        -sRot * normalWorld.x + cRot * normalWorld.z
+    );
+
+    float lat = asin(clamp(normalEarth.y, -1.0, 1.0));
+    float lon = atan(normalEarth.z, normalEarth.x);
 
     // Choose base color: texture or solid
     vec3 baseColor;
@@ -257,10 +273,10 @@ void main() {
 
     // Longitude: compute fwidth analytically to avoid atan2 ±π seam artifact.
     // d(atan(z,x))/ds = (x·dz/ds − z·dx/ds) / (x² + z²)
-    float nxz2 = normalWorld.x * normalWorld.x + normalWorld.z * normalWorld.z;
+    float nxz2 = normalEarth.x * normalEarth.x + normalEarth.z * normalEarth.z;
     float invNxz2 = 1.0 / max(nxz2, 1e-8);
-    float dlon_dx = (normalWorld.x * dFdx(normalWorld.z) - normalWorld.z * dFdx(normalWorld.x)) * invNxz2;
-    float dlon_dy = (normalWorld.x * dFdy(normalWorld.z) - normalWorld.z * dFdy(normalWorld.x)) * invNxz2;
+    float dlon_dx = (normalEarth.x * dFdx(normalEarth.z) - normalEarth.z * dFdx(normalEarth.x)) * invNxz2;
+    float dlon_dy = (normalEarth.x * dFdy(normalEarth.z) - normalEarth.z * dFdy(normalEarth.x)) * invNxz2;
     float fwLon = max((abs(dlon_dx) + abs(dlon_dy)) * gridPx, 1e-4);
 
     float grid = max(
@@ -286,7 +302,7 @@ void main() {
     // User location marker (blue center with a thin white ring)
     if (u_hasUserLocation > 0.5) {
         // Angular distance from user location (0 = exactly there, grows with distance)
-        float markerDot = dot(normalWorld, u_userDirWorld);
+        float markerDot = dot(normalEarth, u_userDirWorld);
         float angDist = acos(clamp(markerDot, -1.0, 1.0));
         float aaAng = max(fwidth(angDist), 1e-5);
 
@@ -306,11 +322,36 @@ void main() {
 }
 `
 
+const ORBIT_VERTEX_SHADER = `#version 300 es
+precision highp float;
+
+in vec3 a_position;
+uniform mat4 u_viewMatrix;
+uniform mat4 u_projMatrix;
+
+void main() {
+    gl_Position = u_projMatrix * u_viewMatrix * vec4(a_position, 1.0);
+}
+`
+
+const ORBIT_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+
+uniform vec4 u_color;
+out vec4 fragColor;
+
+void main() {
+    fragColor = u_color;
+}
+`
+
 // Maximum entities we can render (pre-allocated buffer size)
 const MAX_INSTANCES = 100000
 
 // Instance data stride: x, y, z, size, r, g, b (7 floats per instance)
 const INSTANCE_STRIDE = 7
+const ORBIT_SEGMENTS = 240
+const TWO_PI = Math.PI * 2
 
 export type PickableRenderer = System & {
     /** Screen-space pick: returns entity ID of satellite nearest to (screenX, screenY), or undefined. */
@@ -346,6 +387,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
     const vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER)
     const bodyFragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
     const earthFragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, EARTH_FRAGMENT_SHADER)
+    const orbitVertexShader = compileShader(gl, gl.VERTEX_SHADER, ORBIT_VERTEX_SHADER)
+    const orbitFragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, ORBIT_FRAGMENT_SHADER)
 
     // Link programs
     const bodyProgram = gl.createProgram()!
@@ -364,6 +407,15 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
 
     if (!gl.getProgramParameter(earthProgram, gl.LINK_STATUS)) {
         throw new Error('Shader program link failed (earth): ' + gl.getProgramInfoLog(earthProgram))
+    }
+
+    const orbitProgram = gl.createProgram()!
+    gl.attachShader(orbitProgram, orbitVertexShader)
+    gl.attachShader(orbitProgram, orbitFragmentShader)
+    gl.linkProgram(orbitProgram)
+
+    if (!gl.getProgramParameter(orbitProgram, gl.LINK_STATUS)) {
+        throw new Error('Shader program link failed (orbit): ' + gl.getProgramInfoLog(orbitProgram))
     }
 
     // Get attribute and uniform locations
@@ -398,6 +450,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
         cameraRight: gl.getUniformLocation(earthProgram, 'u_cameraRight'),
         cameraUp: gl.getUniformLocation(earthProgram, 'u_cameraUp'),
         cameraForward: gl.getUniformLocation(earthProgram, 'u_cameraForward'),
+        earthRotationRad: gl.getUniformLocation(earthProgram, 'u_earthRotationRad'),
         minPixelSize: gl.getUniformLocation(earthProgram, 'u_minPixelSize'),
         perspectiveSphere: gl.getUniformLocation(earthProgram, 'u_perspectiveSphere'),
         userDirWorld: gl.getUniformLocation(earthProgram, 'u_userDirWorld'),
@@ -406,6 +459,16 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
         hasTexture: gl.getUniformLocation(earthProgram, 'u_hasTexture'),
         sunDirWorld: gl.getUniformLocation(earthProgram, 'u_sunDirWorld'),
         sunlightMode: gl.getUniformLocation(earthProgram, 'u_sunlightMode')
+    }
+
+    const orbitAttribs = {
+        position: gl.getAttribLocation(orbitProgram, 'a_position')
+    }
+
+    const orbitUniforms = {
+        viewMatrix: gl.getUniformLocation(orbitProgram, 'u_viewMatrix'),
+        projMatrix: gl.getUniformLocation(orbitProgram, 'u_projMatrix'),
+        color: gl.getUniformLocation(orbitProgram, 'u_color')
     }
 
     // Create unit quad geometry (two triangles forming a square from -1 to 1)
@@ -451,6 +514,76 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
     gl.vertexAttribDivisor(bodyAttribs.color, 1)
 
     gl.bindVertexArray(null)
+
+    const orbitVao = gl.createVertexArray()!
+    gl.bindVertexArray(orbitVao)
+    const orbitBuffer = gl.createBuffer()!
+    gl.bindBuffer(gl.ARRAY_BUFFER, orbitBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, (ORBIT_SEGMENTS + 1) * 3 * 4, gl.DYNAMIC_DRAW)
+    gl.enableVertexAttribArray(orbitAttribs.position)
+    gl.vertexAttribPointer(orbitAttribs.position, 3, gl.FLOAT, false, 0, 0)
+    gl.bindVertexArray(null)
+    const orbitData = new Float32Array((ORBIT_SEGMENTS + 1) * 3)
+
+    const fillOrbitData = (orbit: {
+        eccentricity: number
+        semiMajorAxis: number
+        m11: number
+        m12: number
+        m21: number
+        m22: number
+        m31: number
+        m32: number
+    }): void => {
+        let orbitOffset = 0
+        const e = orbit.eccentricity
+        const a = orbit.semiMajorAxis
+        const sqrtOneMinusESq = Math.sqrt(Math.max(0, 1 - e * e))
+
+        for (let i = 0; i <= ORBIT_SEGMENTS; i++) {
+            const M = (i / ORBIT_SEGMENTS) * TWO_PI
+            let xPerif: number
+            let yPerif: number
+
+            if (e < 1e-6) {
+                xPerif = a * Math.cos(M)
+                yPerif = a * Math.sin(M)
+            } else {
+                const E = solveKeplerE(M, e)
+                const cosE = Math.cos(E)
+                const sinE = Math.sin(E)
+                xPerif = a * (cosE - e)
+                yPerif = a * (sqrtOneMinusESq * sinE)
+            }
+
+            const xEci = orbit.m11 * xPerif + orbit.m12 * yPerif
+            const yEci = orbit.m21 * xPerif + orbit.m22 * yPerif
+            const zEci = orbit.m31 * xPerif + orbit.m32 * yPerif
+
+            orbitData[orbitOffset++] = xEci
+            orbitData[orbitOffset++] = zEci
+            orbitData[orbitOffset++] = yEci
+        }
+    }
+
+    const drawSelectedOrbit = (world: World, selectedEntity: number | undefined): void => {
+        if (selectedEntity === undefined) return
+        const selectedOrbit = world.getComponent(selectedEntity, Orbit)
+        if (!selectedOrbit) return
+
+        fillOrbitData(selectedOrbit)
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, orbitBuffer)
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, orbitData)
+        gl.depthMask(false)
+        gl.useProgram(orbitProgram)
+        gl.bindVertexArray(orbitVao)
+        gl.uniformMatrix4fv(orbitUniforms.viewMatrix, false, viewMatrix)
+        gl.uniformMatrix4fv(orbitUniforms.projMatrix, false, projMatrix)
+        gl.uniform4f(orbitUniforms.color, 0.55, 0.7, 0.85, 0.8)
+        gl.drawArrays(gl.LINE_STRIP, 0, ORBIT_SEGMENTS + 1)
+        gl.depthMask(true)
+    }
 
     const vaoEarth = gl.createVertexArray()!
     gl.bindVertexArray(vaoEarth)
@@ -498,7 +631,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
     // Optional user-location marker (requested only when an Earth-tagged body exists)
     let userLocationRequested = false
     let hasUserLocation = 0
-    const userDirWorld = new Float32Array([0, 0, 0])
+    const userDirEarthFixedWorld = new Float32Array([0, 0, 0])
+    const userDirInertialWorld = new Float32Array([0, 0, 0])
 
     const requestUserLocation = (): void => {
         if (userLocationRequested) return
@@ -513,9 +647,9 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 const lonRad = (pos.coords.longitude * Math.PI) / 180
                 const cosLat = Math.cos(latRad)
 
-                userDirWorld[0] = cosLat * Math.cos(lonRad)
-                userDirWorld[1] = Math.sin(latRad)
-                userDirWorld[2] = cosLat * Math.sin(lonRad)
+                userDirEarthFixedWorld[0] = cosLat * Math.cos(lonRad)
+                userDirEarthFixedWorld[1] = Math.sin(latRad)
+                userDirEarthFixedWorld[2] = cosLat * Math.sin(lonRad)
                 hasUserLocation = 1
             },
             (err) => {
@@ -688,6 +822,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
             let earthY = 0
             let earthZ = 0
             let earthRadius = 0
+            const earthRotationRad = greenwichSiderealAngleRad(world.simTimeMs)
             if (earthEntities.length > 0) {
                 const earthPos = world.getComponent(earthEntities[0], Position)!
                 earthX = earthPos.x
@@ -697,6 +832,14 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 if (cameraOriginMode === 'user-location') {
                     requestUserLocation()
                 }
+            }
+
+            if (hasUserLocation) {
+                earthFixedToInertialWorld(
+                    world.simTimeMs,
+                    userDirEarthFixedWorld[0], userDirEarthFixedWorld[1], userDirEarthFixedWorld[2],
+                    userDirInertialWorld
+                )
             }
 
             let targetX = 0
@@ -713,9 +856,9 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 targetZ = selectedPos.z
             } else if (earthEntities.length > 0) {
                 if (cameraOriginMode === 'user-location' && hasUserLocation && earthRadius > 0) {
-                    targetX = earthX + userDirWorld[0] * earthRadius
-                    targetY = earthY + userDirWorld[1] * earthRadius
-                    targetZ = earthZ + userDirWorld[2] * earthRadius
+                    targetX = earthX + userDirInertialWorld[0] * earthRadius
+                    targetY = earthY + userDirInertialWorld[1] * earthRadius
+                    targetZ = earthZ + userDirInertialWorld[2] * earthRadius
                 } else {
                     targetX = earthX
                     targetY = earthY
@@ -814,18 +957,11 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
             if (earthCount > 0) {
                 // Compute sun direction and earth radius for shadow testing
                 let shadowEarthRadius = 0
-                let userIsInDarkness = false
+                const cosRot = Math.cos(earthRotationRad)
+                const sinRot = Math.sin(earthRotationRad)
                 if (sunlightModeEnabled) {
                     computeSunDirWorld(world.simTimeMs, sunDirWorld)
                     shadowEarthRadius = earthRadius
-                    // Check if the user's location is on the night side (sun below horizon)
-                    // dot(userDir, sunDir) < ~-0.1 means sun is well below horizon (~6° civil twilight)
-                    if (hasUserLocation) {
-                        const userSunDot = userDirWorld[0] * sunDirWorld[0]
-                            + userDirWorld[1] * sunDirWorld[1]
-                            + userDirWorld[2] * sunDirWorld[2]
-                        userIsInDarkness = userSunDot < -0.1
-                    }
                 }
 
                 // Draw non-Earth bodies first
@@ -842,30 +978,40 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
 
                     let r = 1, g = 1, b = 1
                     if (sunlightModeEnabled && shadowEarthRadius > 0) {
-                        // Sunlight mode: monochrome base, shadow/visibility coloring
-                        const inShadow = isInEarthShadow(
+                        // Sunlight mode: monochrome base with smooth shadow transition.
+                        // Transition span is one second of orbital travel distance.
+                        const orbit = world.getComponent(id, Orbit)
+                        const speedMps = orbit ? estimateOrbitalSpeedApproxMps(orbit) : 0
+                        const transitionSpanMeters = Math.max(speedMps * 1.0, 1.0)
+                        const sunlitByte = sunlitByteFromEarthShadow(
                             pos.x, pos.y, pos.z,
                             sunDirWorld[0], sunDirWorld[1], sunDirWorld[2],
-                            shadowEarthRadius
+                            shadowEarthRadius,
+                            transitionSpanMeters
                         )
-                        if (inShadow) {
-                            // In shadow: very dim
-                            r = 0.06; g = 0.06; b = 0.08
-                        } else {
-                            // Sunlit: monochrome grey
-                            r = 0.5; g = 0.5; b = 0.5
-                            // Check if visible from user location (above horizon)
-                            if (hasUserLocation) {
-                                const MIN_ELEVATION_RAD = 0.175  // ~10 degrees above horizon
-                                const elev = satelliteElevation(
-                                    pos.x, pos.y, pos.z,
-                                    userDirWorld[0], userDirWorld[1], userDirWorld[2],
-                                    shadowEarthRadius
-                                )
-                                if (elev > MIN_ELEVATION_RAD) {
-                                    // Highlight: bright yellow, 2x brighter than sunlit
-                                    r = 1.0; g = 0.9; b = 0.2
-                                }
+                        const sunlitT = sunlitByte / 255
+
+                        // In shadow: very dim. Sunlit: monochrome grey.
+                        r = lerp(0.06, 0.5, sunlitT)
+                        g = lerp(0.06, 0.5, sunlitT)
+                        b = lerp(0.08, 0.5, sunlitT)
+
+                        // Check if visible from user location (above horizon)
+                        if (hasUserLocation) {
+                            const satXEarthFixed = cosRot * pos.x + sinRot * pos.z
+                            const satYEarthFixed = pos.y
+                            const satZEarthFixed = -sinRot * pos.x + cosRot * pos.z
+                            const MIN_ELEVATION_RAD = 0.175  // ~10 degrees above horizon
+                            const elev = satelliteElevation(
+                                satXEarthFixed, satYEarthFixed, satZEarthFixed,
+                                userDirEarthFixedWorld[0], userDirEarthFixedWorld[1], userDirEarthFixedWorld[2],
+                                shadowEarthRadius
+                            )
+                            if (elev > MIN_ELEVATION_RAD) {
+                                // Highlight: bright yellow, scaled by sunlit blend for smooth handoff.
+                                r = lerp(r, 1.0, sunlitT)
+                                g = lerp(g, 0.9, sunlitT)
+                                b = lerp(b, 0.2, sunlitT)
                             }
                         }
                     } else {
@@ -989,9 +1135,13 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 gl.uniform3f(earthUniforms.cameraRight, rightX, rightY, rightZ)
                 gl.uniform3f(earthUniforms.cameraUp, actualUpX, actualUpY, actualUpZ)
                 gl.uniform3f(earthUniforms.cameraForward, -fwdX, -fwdY, -fwdZ)
+                gl.uniform1f(earthUniforms.earthRotationRad, earthRotationRad)
                 gl.uniform1f(earthUniforms.minPixelSize, minPixelSize)
                 gl.uniform1f(earthUniforms.perspectiveSphere, 1.0)
-                gl.uniform3f(earthUniforms.userDirWorld, userDirWorld[0], userDirWorld[1], userDirWorld[2])
+                gl.uniform3f(
+                    earthUniforms.userDirWorld,
+                    userDirEarthFixedWorld[0], userDirEarthFixedWorld[1], userDirEarthFixedWorld[2]
+                )
                 gl.uniform1f(earthUniforms.hasUserLocation, hasUserLocation)
 
                 // Sunlight mode uniforms
@@ -1005,6 +1155,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 gl.uniform1f(earthUniforms.hasTexture, earthTextureReady ? 1.0 : 0.0)
 
                 gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, earthCount)
+
+                drawSelectedOrbit(world, renderer.selectedEntity)
 
                 gl.bindVertexArray(null)
                 return
@@ -1121,6 +1273,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1)
             }
 
+            drawSelectedOrbit(world, renderer.selectedEntity)
+
             gl.bindVertexArray(null)
         }
     }
@@ -1177,4 +1331,27 @@ function clamp01(x: number): number {
 
 function lerp(a: number, b: number, t: number): number {
     return a + (b - a) * t
+}
+
+function solveKeplerE(M: number, e: number): number {
+    let E = M
+    for (let i = 0; i < 6; i++) {
+        const f = E - e * Math.sin(E) - M
+        const fp = 1 - e * Math.cos(E)
+        E -= f / fp
+    }
+    return E
+}
+
+function estimateOrbitalSpeedApproxMps(
+    orbit: {
+        semiMajorAxis: number
+        meanMotionRadPerSec: number
+    }
+): number {
+    const a = orbit.semiMajorAxis
+    const n = orbit.meanMotionRadPerSec
+    if (!(a > 0) || !(n > 0)) return 0
+    // Circular approximation for orbital speed: v ≈ n * a
+    return n * a
 }
