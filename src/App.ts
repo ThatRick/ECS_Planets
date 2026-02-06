@@ -26,7 +26,7 @@ import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPa
 import { System } from './ECS/System.js'
 import type { StarlinkOrbitStatusCode } from './data/starlinkStatus.js'
 import { AppLog, createLogPanel } from './AppLog.js'
-import { computeSunDirWorld, isInEarthShadow } from './lib/solar.js'
+import { computeSunDirWorld, isInEarthShadow, satelliteElevation } from './lib/solar.js'
 import { createPanel, enableDragging, type PanelHandle } from './Panel.js'
 
 export type GravityType = 'simple' | 'barnes-hut'
@@ -130,15 +130,41 @@ export default class App {
         }
         this.updateRendererBadge()
 
-        // Start with the default scene
-        this.world = new World(100)
-        this.setupProtoPlanets(this.world)
-        this.wireWorldCallbacks(this.world)
-        this.setSettingsEnabled(true)
-        this.perfMonitor.reset()
+        // Start with the default scene (Starlinks)
+        this.world = new World(60)
+        this.currentScene = 'starlinks'
         this.bindControls()
-        this.updateStarlinksTimeUiVisibility()
-        AppLog.info('App initialization complete')
+        this.setupStarlinks(this.world).then(() => {
+            this.wireWorldCallbacks(this.world)
+            this.setSettingsEnabled(false)
+            this.updateStarlinksTimeUiVisibility()
+            this.updateStarlinksTimeUi()
+            if (this.sceneNameEl) {
+                this.sceneNameEl.textContent = 'Starlinks'
+            }
+            if (this.sceneSelectEl) {
+                this.sceneSelectEl.value = 'starlinks'
+            }
+            this.perfMonitor.reset()
+            AppLog.info('App initialization complete')
+        }).catch(err => {
+            // Fallback to proto-planets if Starlinks fails to load
+            AppLog.warn('Failed to load Starlinks, falling back to proto-planets: ' + err)
+            this.world = new World(100)
+            this.currentScene = 'proto-planets'
+            this.setupProtoPlanets(this.world)
+            this.wireWorldCallbacks(this.world)
+            this.setSettingsEnabled(true)
+            this.updateStarlinksTimeUiVisibility()
+            if (this.sceneNameEl) {
+                this.sceneNameEl.textContent = 'Proto planets'
+            }
+            if (this.sceneSelectEl) {
+                this.sceneSelectEl.value = 'proto-planets'
+            }
+            this.perfMonitor.reset()
+            AppLog.info('App initialization complete (fallback)')
+        })
 
         // Main render loop
         const loop = () => {

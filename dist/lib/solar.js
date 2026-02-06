@@ -51,6 +51,33 @@ export function computeSunDirWorld(utcMs, out) {
     out[2] = yEci;
 }
 /**
+ * Compute the elevation angle (radians) of a satellite above the observer's
+ * local horizon.
+ *
+ * The observer is on the Earth's surface at the position `userDir * earthRadius`.
+ * The elevation is the angle between the observer-to-satellite vector and the
+ * local horizon plane (perpendicular to userDir at the observer).
+ *
+ * @returns elevation in radians (positive = above horizon, negative = below)
+ */
+export function satelliteElevation(satX, satY, satZ, userDirX, userDirY, userDirZ, earthRadius) {
+    // Observer position on Earth's surface
+    const obsX = userDirX * earthRadius;
+    const obsY = userDirY * earthRadius;
+    const obsZ = userDirZ * earthRadius;
+    // Vector from observer to satellite
+    const toSatX = satX - obsX;
+    const toSatY = satY - obsY;
+    const toSatZ = satZ - obsZ;
+    const dist = Math.sqrt(toSatX * toSatX + toSatY * toSatY + toSatZ * toSatZ);
+    if (dist < 1)
+        return -1; // degenerate
+    // Dot product of (observer-to-satellite) with (up direction = userDir)
+    // gives the sine of the elevation angle
+    const sinElev = (toSatX * userDirX + toSatY * userDirY + toSatZ * userDirZ) / dist;
+    return Math.asin(Math.max(-1, Math.min(1, sinElev)));
+}
+/**
  * Test whether a satellite is in Earth's cylindrical shadow.
  *
  * @param satX, satY, satZ      Satellite position (world coords, Earth at origin)

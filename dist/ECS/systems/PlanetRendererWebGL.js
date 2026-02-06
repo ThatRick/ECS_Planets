@@ -1,6 +1,6 @@
 import { Position, Size, Color, Temperature, CameraComponent, EarthTag } from '../Components.js';
 import { AppLog } from '../../AppLog.js';
-import { computeSunDirWorld, isInEarthShadow } from '../../lib/solar.js';
+import { computeSunDirWorld, isInEarthShadow, satelliteElevation } from '../../lib/solar.js';
 // Vertex shader - 3D perspective projection with billboarded quads
 const VERTEX_SHADER = `#version 300 es
 precision highp float;
@@ -141,32 +141,6 @@ void main() {
     float z = sqrt(1.0 - distSq);
     vec3 normalLocal = normalize(vec3(v_uv, z));
 
-    // Lighting: choose between fixed view-space light and sun-based world-space light.
-    vec3 lightDir;
-    float ambient;
-    float diffuseScale;
-
-    if (u_sunlightMode > 0.5) {
-        // Transform sun direction from world space to local (billboard) space
-        lightDir = normalize(vec3(
-            dot(u_sunDirWorld, u_cameraRight),
-            dot(u_sunDirWorld, u_cameraUp),
-            dot(u_sunDirWorld, u_cameraForward)
-        ));
-        ambient = 0.02;
-        diffuseScale = 0.98;
-    } else {
-        lightDir = normalize(vec3(0.35, 0.25, 1.0));
-        ambient = 0.28;
-        diffuseScale = 0.72;
-    }
-
-    float diffuse = max(dot(normalLocal, lightDir), 0.0);
-
-    vec3 viewDir = vec3(0.0, 0.0, 1.0);
-    vec3 reflectDir = reflect(-lightDir, normalLocal);
-    float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
-
     // Map the visible hemisphere to world directions so the grid is anchored to world axes.
     vec3 normalWorld = normalize(
         u_cameraRight * normalLocal.x +
@@ -186,9 +160,48 @@ void main() {
         baseColor = v_color;
     }
 
-    // Apply lighting to base color
-    vec3 col = baseColor * (ambient + diffuse * diffuseScale);
-    col += spec * 0.15;
+    // Lighting
+    vec3 col;
+    float sunlightDayFactor = 1.0;  // used to dim grid on night side
+    if (u_sunlightMode > 0.5) {
+        // Sun-based world-space lighting for realistic day/night
+        float sunDot = dot(normalWorld, u_sunDirWorld);
+
+        // Smooth terminator band (transition over ~6 degrees)
+        float dayFactor = smoothstep(-0.05, 0.05, sunDot);
+        sunlightDayFactor = dayFactor;
+
+        // Day side: bright sunlight with diffuse shading
+        float diffuse = max(sunDot, 0.0);
+        vec3 dayColor = baseColor * (0.20 + diffuse * 0.80);
+
+        // Specular highlight on day side (compute in local space for view-relative)
+        vec3 sunDirLocal = normalize(vec3(
+            dot(u_sunDirWorld, u_cameraRight),
+            dot(u_sunDirWorld, u_cameraUp),
+            dot(u_sunDirWorld, u_cameraForward)
+        ));
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+        vec3 reflectDir = reflect(-sunDirLocal, normalLocal);
+        float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
+
+        dayColor += spec * 0.2;
+
+        // Night side: near-black with faint blue atmosphere hint
+        vec3 nightColor = baseColor * 0.02 + vec3(0.003, 0.005, 0.012);
+
+        col = mix(nightColor, dayColor, dayFactor);
+    } else {
+        // Original fixed view-space lighting
+        vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
+        float diffuse = max(dot(normalLocal, lightDir), 0.0);
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+        vec3 reflectDir = reflect(-lightDir, normalLocal);
+        float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
+
+        col = baseColor * (0.28 + diffuse * 0.72);
+        col += spec * 0.15;
+    }
 
     float latStep = radians(15.0);
     float lonStep = radians(15.0);
@@ -217,8 +230,12 @@ void main() {
     float pm = 1.0 - smoothstep(lonW, lonW * 1.5, abs(lon));
     grid = max(grid, max(eq, pm) * 0.6);
 
-    // Grid is more subtle over texture, more visible on solid color
+    // Grid is more subtle over texture, more visible on solid color.
+    // In sunlight mode, dim grid on the night side so it doesn't wash out the darkness.
     float gridAlpha = u_hasTexture > 0.5 ? 0.2 : 0.35;
+    if (u_sunlightMode > 0.5) {
+        gridAlpha *= mix(0.08, 1.0, sunlightDayFactor);
+    }
     col = mix(col, vec3(0.95, 0.95, 1.0), grid * gridAlpha);
 
     // User location marker (red with a thin white ring)
@@ -632,10 +649,19 @@ export function createPlanetRendererWebGL(canvas) {
             if (earthCount > 0) {
                 // Compute sun direction and earth radius for shadow testing
                 let shadowEarthRadius = 0;
+                let userIsInDarkness = false;
                 if (sunlightModeEnabled) {
                     computeSunDirWorld(world.simTimeMs, sunDirWorld);
                     if (earthEntities.length > 0) {
                         shadowEarthRadius = world.getComponent(earthEntities[0], Size) ?? 0;
+                    }
+                    // Check if the user's location is on the night side (sun below horizon)
+                    // dot(userDir, sunDir) < ~-0.1 means sun is well below horizon (~6° civil twilight)
+                    if (hasUserLocation) {
+                        const userSunDot = userDirWorld[0] * sunDirWorld[0]
+                            + userDirWorld[1] * sunDirWorld[1]
+                            + userDirWorld[2] * sunDirWorld[2];
+                        userIsInDarkness = userSunDot < -0.1;
                     }
                 }
                 // Draw non-Earth bodies first
@@ -651,24 +677,45 @@ export function createPlanetRendererWebGL(canvas) {
                     const color = world.getComponent(id, Color);
                     const temp = world.getComponent(id, Temperature);
                     let r = 1, g = 1, b = 1;
-                    if (color) {
-                        r = color.x;
-                        g = color.y;
-                        b = color.z;
-                    }
-                    else if (temp !== undefined) {
-                        temperatureToRGB(temp, tmpRgb);
-                        r = tmpRgb[0];
-                        g = tmpRgb[1];
-                        b = tmpRgb[2];
-                    }
-                    // Shadow test: dim satellites in Earth's shadow
                     if (sunlightModeEnabled && shadowEarthRadius > 0) {
-                        if (isInEarthShadow(pos.x, pos.y, pos.z, sunDirWorld[0], sunDirWorld[1], sunDirWorld[2], shadowEarthRadius)) {
-                            const shadowFactor = 0.08;
-                            r *= shadowFactor;
-                            g *= shadowFactor;
-                            b *= shadowFactor;
+                        // Sunlight mode: monochrome base, shadow/visibility coloring
+                        const inShadow = isInEarthShadow(pos.x, pos.y, pos.z, sunDirWorld[0], sunDirWorld[1], sunDirWorld[2], shadowEarthRadius);
+                        if (inShadow) {
+                            // In shadow: very dim
+                            r = 0.06;
+                            g = 0.06;
+                            b = 0.08;
+                        }
+                        else {
+                            // Sunlit: monochrome grey
+                            r = 0.5;
+                            g = 0.5;
+                            b = 0.5;
+                            // Check if visible from user location (above horizon)
+                            if (hasUserLocation) {
+                                const MIN_ELEVATION_RAD = 0.175; // ~10 degrees above horizon
+                                const elev = satelliteElevation(pos.x, pos.y, pos.z, userDirWorld[0], userDirWorld[1], userDirWorld[2], shadowEarthRadius);
+                                if (elev > MIN_ELEVATION_RAD) {
+                                    // Highlight: bright yellow, 2x brighter than sunlit
+                                    r = 1.0;
+                                    g = 0.9;
+                                    b = 0.2;
+                                }
+                            }
+                        }
+                    }
+                    else {
+                        // Normal mode: use status colors
+                        if (color) {
+                            r = color.x;
+                            g = color.y;
+                            b = color.z;
+                        }
+                        else if (temp !== undefined) {
+                            temperatureToRGB(temp, tmpRgb);
+                            r = tmpRgb[0];
+                            g = tmpRgb[1];
+                            b = tmpRgb[2];
                         }
                     }
                     instanceData[offset++] = pos.x;
