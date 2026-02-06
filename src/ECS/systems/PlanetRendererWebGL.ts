@@ -157,12 +157,8 @@ float gridLine(float coord, float stepRad, float fw) {
 void main() {
     float distSq = dot(v_uv, v_uv);
 
-    // AA using fwidth(v_uv) – stable linear interpolant, no sqrt derivatives.
-    // Smoothstep upper bound is exactly 1.0 so nothing outside the circle gets alpha.
-    float pixelSize = length(fwidth(v_uv));
-    float edge = max(2.0 * pixelSize, 0.002);
-    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
-    if (alpha < 0.01) discard;
+    // Cheap conservative reject before the ray/sphere math.
+    if (distSq > 1.08) discard;
 
     // Perspective-correct sphere intersection in view space.
     vec3 centerView = v_centerView;
@@ -172,7 +168,14 @@ void main() {
     float c = dot(centerView, centerView) - v_radius * v_radius;
     float h = b * b - c;
     if (h <= 0.0) discard;
-    float t = b - sqrt(h);
+
+    // Use the geometric discriminant as the limb coverage metric.
+    // This tracks the true projected sphere edge and reduces shimmer versus UV-edge AA.
+    float limbAA = max(fwidth(h), 1e-5);
+    float alpha = smoothstep(0.0, limbAA * 1.5, h);
+    if (alpha <= 0.001) discard;
+
+    float t = b - sqrt(max(h, 0.0));
     if (t <= 0.0) discard;
 
     vec3 viewPos = rayDir * t;
@@ -913,18 +916,21 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                     const selSize = world.getComponent(renderer.selectedEntity, Size)
                     if (selSize !== undefined && selSize > 0) {
                         // Ring: larger billboard with bright color, rendered with blending
-                        const ringScale = 4.0
+                        const ringScale = 2.0
                         instanceData[0] = selPos.x
                         instanceData[1] = selPos.y
                         instanceData[2] = selPos.z
                         instanceData[3] = selSize * ringScale
-                        instanceData[4] = 1.0 // bright white
-                        instanceData[5] = 1.0
+                        instanceData[4] = 0.2 // bright blue
+                        instanceData[5] = 0.55
                         instanceData[6] = 1.0
 
                         gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer)
                         gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, INSTANCE_STRIDE))
 
+                        // Draw highlight as an overlay to avoid z-fighting with the selected satellite sprite.
+                        gl.disable(gl.DEPTH_TEST)
+                        gl.depthMask(false)
                         gl.useProgram(bodyProgram)
                         gl.bindVertexArray(vaoBody)
                         gl.uniform2f(bodyUniforms.resolution, width, height)
@@ -935,6 +941,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                         gl.uniform1f(bodyUniforms.minPixelSize, 8.0) // ensure ring is visible
                         gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0)
                         gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1)
+                        gl.depthMask(true)
+                        gl.enable(gl.DEPTH_TEST)
                     }
                 }
 
