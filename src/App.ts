@@ -22,13 +22,13 @@ import {
     type PickableRenderer,
     type CameraOriginMode
 } from './ECS/index.js'
-import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js'
+import { PerfMonitor, createPerfOverlay, setPerfOverlayRenderer, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js'
 import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode, setGravityAlgoValue } from './SettingsPanel.js'
 import { System } from './ECS/System.js'
 import type { StarlinkOrbitStatusCode } from './data/starlinkStatus.js'
 import { AppLog, createLogPanel } from './AppLog.js'
 import { computeSunDirWorld, isInEarthShadow, satelliteElevation } from './lib/solar.js'
-import { createPanel, enableDragging, type PanelHandle } from './Panel.js'
+import { createPanel, type PanelHandle } from './Panel.js'
 
 export type GravityType = 'simple' | 'barnes-hut'
 export type RendererType = 'webgl' | 'canvas'
@@ -54,12 +54,12 @@ export default class App {
     world: World
     private bodyCountEl: HTMLElement | null
     private sceneNameEl: HTMLElement | null
-    private sceneSelectEl: HTMLSelectElement | null
     private loadSceneBtn: HTMLButtonElement | null
     private simTimeStatusEl: HTMLElement | null
     private simTimeEl: HTMLElement | null
     private nowBtn: HTMLButtonElement | null
     private cameraOriginBtn: HTMLButtonElement | null
+    private legendBtn: HTMLButtonElement | null
     private perfMonitor: PerfMonitor
     private currentGravityType: GravityType = 'barnes-hut'
     private currentRenderer: RendererType = 'canvas'
@@ -68,7 +68,7 @@ export default class App {
     private playPauseBtn: HTMLElement | null
     private sharedCameraSystem: System
     private sharedRendererSystem: System | null = null
-    private legendEl: HTMLElement | null = null
+    private legendPanel: PanelHandle | null = null
     private satelliteStatusMap: Map<number, string> = new Map()  // entity ID → status code
     private satelliteNoradMap: Map<number, number> = new Map()   // entity ID → NORAD ID
     private satSizeM: number = 30_000
@@ -76,18 +76,19 @@ export default class App {
     private selectedEntity: number | undefined
     private infoPanel: PanelHandle | null = null
     private logPanel: PanelHandle
+    private scenePickerPanel: PanelHandle | null = null
 
     constructor(canvas: HTMLCanvasElement) {
         AppLog.info('App initialization started')
         this.canvas = canvas
         this.bodyCountEl = document.getElementById('bodyCount')
         this.sceneNameEl = document.getElementById('sceneName')
-        this.sceneSelectEl = document.getElementById('sceneSelect') as HTMLSelectElement | null
         this.loadSceneBtn = document.getElementById('loadSceneBtn') as HTMLButtonElement | null
         this.simTimeStatusEl = document.getElementById('simTimeStatus')
         this.simTimeEl = document.getElementById('simTimeDisplay')
         this.nowBtn = document.getElementById('nowButton') as HTMLButtonElement | null
         this.cameraOriginBtn = document.getElementById('cameraOriginBtn') as HTMLButtonElement | null
+        this.legendBtn = document.getElementById('legendBtn') as HTMLButtonElement | null
         this.playPauseBtn = document.getElementById('playPauseBtn')
         this.perfMonitor = new PerfMonitor()
 
@@ -104,8 +105,8 @@ export default class App {
         document.body.appendChild(settingsPanel)
 
         // Add satellite status legend (hidden by default)
-        this.legendEl = this.createStarlinkLegend()
-        document.body.appendChild(this.legendEl)
+        this.legendPanel = this.createStarlinkLegend()
+        document.body.appendChild(this.legendPanel.element)
 
         // Add satellite info panel (hidden by default)
         this.infoPanel = this.createInfoPanel()
@@ -114,6 +115,11 @@ export default class App {
         // Add log panel (hidden by default)
         this.logPanel = createLogPanel()
         document.body.appendChild(this.logPanel.element)
+
+        // Add scene picker popup (hidden by default)
+        this.scenePickerPanel = this.createScenePickerPanel()
+        document.body.appendChild(this.scenePickerPanel.element)
+        this.updateScenePickerState()
 
         // Click-to-select satellite detection
         this.setupClickSelection()
@@ -138,9 +144,10 @@ export default class App {
             this.sharedRendererSystem = createPlanetRenderer(this.canvas)
             this.currentRenderer = 'canvas'
         }
-        this.updateRendererBadge()
+        this.updateRendererIndicator()
         this.applyCameraOriginMode()
         this.updateCameraOriginButton()
+        this.setSunlightMode(true)
 
         // Start with the default scene (Starlinks)
         this.world = new World(60)
@@ -154,9 +161,9 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = 'Starlinks'
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = 'starlinks'
-            }
+            this.updateScenePickerState()
+            this.jumpStarlinksToNow()
+            this.startSimulationIfStopped()
             this.perfMonitor.reset()
             AppLog.info('App initialization complete')
         }).catch(err => {
@@ -171,9 +178,8 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = 'Proto planets'
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = 'proto-planets'
-            }
+            this.updateScenePickerState()
+            this.startSimulationIfStopped()
             this.perfMonitor.reset()
             AppLog.info('App initialization complete (fallback)')
         })
@@ -364,12 +370,17 @@ export default class App {
         AppLog.info(`Reset: ${settings.bodyCount} bodies, mode=${settings.velocityMode}, scale=${settings.velocityScale}`)
     }
 
-    private updateRendererBadge(): void {
-        const badge = document.getElementById('rendererBadge')
-        if (badge) {
-            badge.textContent = this.currentRenderer === 'webgl' ? 'WebGL 2' : 'Canvas 2D'
-            badge.className = `renderer-badge ${this.currentRenderer}`
+    private updateRendererIndicator(): void {
+        setPerfOverlayRenderer(this.currentRenderer)
+    }
+
+    private setSunlightMode(enabled: boolean): void {
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (renderer) {
+            renderer.sunlightMode = enabled
         }
+        const sunlightBtn = document.getElementById('sunlightBtn')
+        sunlightBtn?.classList.toggle('sunlight-active', enabled)
     }
 
     private applyCameraOriginMode(): void {
@@ -399,22 +410,29 @@ export default class App {
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks)
         this.nowBtn?.classList.toggle('hidden', !isStarlinks)
         this.cameraOriginBtn?.classList.toggle('hidden', !isStarlinks)
-        this.legendEl?.classList.toggle('hidden', !isStarlinks)
+        this.legendBtn?.classList.toggle('hidden', !isStarlinks)
+        if (isStarlinks) {
+            this.legendPanel?.show()
+        } else {
+            this.legendPanel?.hide()
+        }
+        this.updateLegendButtonState()
         const sunlightBtn = document.getElementById('sunlightBtn')
         sunlightBtn?.classList.toggle('hidden', !isStarlinks)
     }
 
-    private createStarlinkLegend(): HTMLElement {
+    private createStarlinkLegend(): PanelHandle {
         const panel = createPanel({
             id: 'starlink-legend',
             title: 'Satellite Status',
             startHidden: true,
-            closable: false,
+            closable: true,
             position: {
                 bottom: 'max(12px, env(safe-area-inset-bottom))',
                 right: 'max(12px, env(safe-area-inset-right))'
             },
-            zIndex: 10
+            zIndex: 10,
+            onClose: () => this.updateLegendButtonState()
         })
 
         const entries: [string, string, Vec3][] = [
@@ -451,7 +469,59 @@ export default class App {
             this.toggleStatusVisibility(code, target.checked)
         })
 
-        return panel.element
+        return panel
+    }
+
+    private createScenePickerPanel(): PanelHandle {
+        const panel = createPanel({
+            id: 'scene-picker',
+            title: 'Load Scene',
+            startHidden: true,
+            position: {
+                top: 'max(64px, calc(env(safe-area-inset-top) + 56px))',
+                right: 'max(12px, env(safe-area-inset-right))'
+            },
+            zIndex: 20,
+            minWidth: '220px'
+        })
+
+        panel.content.innerHTML = `
+            <div class="scene-picker-list">
+                <button class="scene-picker-btn" data-scene="proto-planets" type="button">
+                    <span class="scene-picker-title">Proto planets</span>
+                    <span class="scene-picker-desc">Procedural n-body sandbox</span>
+                </button>
+                <button class="scene-picker-btn" data-scene="starlinks" type="button">
+                    <span class="scene-picker-title">Starlinks</span>
+                    <span class="scene-picker-desc">Live orbital constellation view</span>
+                </button>
+            </div>
+        `
+
+        panel.content.addEventListener('click', (e) => {
+            const target = e.target as HTMLElement | null
+            const btn = target?.closest('button[data-scene]') as HTMLButtonElement | null
+            if (!btn) return
+            const scene = btn.dataset.scene as SceneId | undefined
+            if (!scene) return
+            panel.hide()
+            void this.loadScene(scene)
+        })
+
+        this.updateScenePickerState()
+        return panel
+    }
+
+    private updateScenePickerState(): void {
+        if (!this.scenePickerPanel) return
+        const buttons = this.scenePickerPanel.content.querySelectorAll<HTMLButtonElement>('button[data-scene]')
+        buttons.forEach((btn) => {
+            const scene = btn.dataset.scene as SceneId | undefined
+            const active = scene === this.currentScene
+            btn.classList.toggle('active', active)
+            btn.disabled = active
+            btn.setAttribute('aria-pressed', active ? 'true' : 'false')
+        })
     }
 
     private toggleStatusVisibility(statusCode: string, visible: boolean): void {
@@ -575,7 +645,12 @@ export default class App {
     private updateStarlinksTimeUi(): void {
         if (this.currentScene !== 'starlinks') return
         if (!this.simTimeEl) return
-        this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs)
+        const renderer = this.sharedRendererSystem as PickableRenderer | null
+        if (renderer?.hasUserLocation) {
+            this.simTimeEl.textContent = formatLocalTimeMs(this.world.simTimeMs)
+        } else {
+            this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs)
+        }
     }
 
     private jumpStarlinksToNow(): void {
@@ -816,7 +891,6 @@ export default class App {
         if (scene === this.currentScene) return
         AppLog.info(`Loading scene: ${scene}`)
 
-        const wasRunning = this.isRunning
         if (this.isRunning) {
             this.world.stop()
             this.isRunning = false
@@ -827,17 +901,8 @@ export default class App {
             this.loadSceneBtn.disabled = true
             this.loadSceneBtn.textContent = 'Loading…'
         }
-        if (this.sceneSelectEl) {
-            this.sceneSelectEl.disabled = true
-        }
 
         this.clearSelection()
-
-        // Reset sunlight mode
-        const renderer = this.sharedRendererSystem as PickableRenderer | null
-        if (renderer) renderer.sunlightMode = false
-        const sunlightBtn = document.getElementById('sunlightBtn')
-        sunlightBtn?.classList.remove('sunlight-active')
 
         const newWorld = new World(scene === 'proto-planets' ? 100 : 60)
         try {
@@ -858,24 +923,18 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = scene === 'proto-planets' ? 'Proto planets' : 'Starlinks'
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = scene
-            }
+            this.updateScenePickerState()
 
             this.perfMonitor.reset()
-
-            if (wasRunning) {
-                this.world.start()
-                this.isRunning = true
-                this.updatePlayPauseButton()
+            this.setSunlightMode(true)
+            if (scene === 'starlinks') {
+                this.jumpStarlinksToNow()
             }
+            this.startSimulationIfStopped()
         } finally {
             if (this.loadSceneBtn) {
                 this.loadSceneBtn.disabled = false
                 this.loadSceneBtn.textContent = 'Load'
-            }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.disabled = false
             }
         }
     }
@@ -931,14 +990,21 @@ export default class App {
             cameraOriginBtn.addEventListener('click', () => this.cycleCameraOriginMode())
         }
 
+        const legendBtn = document.getElementById('legendBtn')
+        if (legendBtn) {
+            legendBtn.addEventListener('click', () => {
+                this.legendPanel?.toggle()
+                this.updateLegendButtonState()
+            })
+        }
+
         // Sunlight mode toggle
         const sunlightBtn = document.getElementById('sunlightBtn')
         if (sunlightBtn) {
             sunlightBtn.addEventListener('click', () => {
                 const renderer = this.sharedRendererSystem as PickableRenderer | null
                 if (!renderer) return
-                renderer.sunlightMode = !renderer.sunlightMode
-                sunlightBtn.classList.toggle('sunlight-active', renderer.sunlightMode)
+                this.setSunlightMode(!renderer.sunlightMode)
             })
         }
 
@@ -968,10 +1034,10 @@ export default class App {
 
         // Scene loader
         const loadSceneBtn = document.getElementById('loadSceneBtn')
-        const sceneSelect = document.getElementById('sceneSelect') as HTMLSelectElement | null
-        if (loadSceneBtn && sceneSelect) {
+        if (loadSceneBtn) {
             loadSceneBtn.addEventListener('click', () => {
-                void this.loadScene(sceneSelect.value as SceneId)
+                this.updateScenePickerState()
+                this.scenePickerPanel?.show()
             })
         }
 
@@ -998,6 +1064,20 @@ export default class App {
                     break
             }
         })
+    }
+
+    private updateLegendButtonState(): void {
+        if (!this.legendBtn || !this.legendPanel) return
+        const isVisible = this.currentScene === 'starlinks' && this.legendPanel.isVisible()
+        this.legendBtn.classList.toggle('legend-active', isVisible)
+        this.legendBtn.setAttribute('aria-pressed', isVisible ? 'true' : 'false')
+    }
+
+    private startSimulationIfStopped(): void {
+        if (this.isRunning) return
+        this.world.start()
+        this.isRunning = true
+        this.updatePlayPauseButton()
     }
 
     private updateBodyCount(): void {
@@ -1531,6 +1611,40 @@ function formatUtcTimeMs(ms: number): string {
     try {
         const iso = new Date(ms).toISOString()
         return iso.replace('T', ' ').replace(/\.\d{3}Z$/, 'Z')
+    } catch {
+        return '--'
+    }
+}
+
+function formatLocalTimeMs(ms: number): string {
+    if (!Number.isFinite(ms)) return '--'
+    try {
+        const date = new Date(ms)
+        const formatter = new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+            timeZoneName: 'short'
+        })
+        const parts = formatter.formatToParts(date)
+        const part = (type: Intl.DateTimeFormatPartTypes): string =>
+            parts.find(p => p.type === type)?.value ?? ''
+
+        const yyyy = part('year')
+        const mm = part('month')
+        const dd = part('day')
+        const hh = part('hour')
+        const min = part('minute')
+        const sec = part('second')
+        const tz = part('timeZoneName')
+        if (!yyyy || !mm || !dd || !hh || !min || !sec) {
+            return formatter.format(date)
+        }
+        return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ''}`
     } catch {
         return '--'
     }

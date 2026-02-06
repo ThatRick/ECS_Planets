@@ -97,31 +97,6 @@
             min-width: 38px;
         }
 
-        select.scene-select {
-            padding: 8px 12px;
-            border: none;
-            border-radius: 6px;
-            background: #333;
-            color: #fff;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23bbb' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 10px center;
-            padding-right: 30px;
-        }
-
-        select.scene-select:hover {
-            background-color: #444;
-        }
-
-        select.scene-select:disabled {
-            opacity: 0.6;
-            cursor: default;
-        }
-
         .time-controls {
             display: flex;
             align-items: center;
@@ -174,25 +149,6 @@
             font-variant-numeric: tabular-nums;
         }
 
-        .renderer-badge {
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .renderer-badge.webgl {
-            background: #2a5a2a;
-            color: #8f8;
-        }
-
-        .renderer-badge.canvas {
-            background: #5a4a2a;
-            color: #fc8;
-        }
-
         button.sunlight-active {
             background: #7a6a2a;
             color: #ffd;
@@ -200,6 +156,15 @@
 
         button.sunlight-active:hover {
             background: #9a8a3a;
+        }
+
+        button.legend-active {
+            background: #2b5b7a;
+            color: #e8f6ff;
+        }
+
+        button.legend-active:hover {
+            background: #3a6f91;
         }
 
         .hidden {
@@ -241,6 +206,60 @@
             height: 10px;
             border-radius: 50%;
             flex-shrink: 0;
+        }
+
+        /* Scene picker content styles (panel chrome handled by Panel.ts) */
+        #scene-picker {
+            font-size: 12px;
+            color: #ddd;
+        }
+
+        .scene-picker-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .scene-picker-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 2px;
+            width: 100%;
+            border: 1px solid #3c3c3c;
+            border-radius: 8px;
+            background: #262626;
+            color: #efefef;
+            padding: 10px;
+            cursor: pointer;
+            text-align: left;
+            transition: border-color 0.15s, background 0.15s;
+        }
+
+        .scene-picker-btn:hover {
+            border-color: #67a6c7;
+            background: #2f2f2f;
+        }
+
+        .scene-picker-btn.active {
+            border-color: #3f8a4f;
+            background: #243728;
+            color: #b9f0c5;
+            cursor: default;
+        }
+
+        .scene-picker-btn:disabled {
+            opacity: 1;
+        }
+
+        .scene-picker-title {
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .scene-picker-desc {
+            color: #9fa7ad;
+            font-size: 11px;
         }
 
         /* Satellite info content styles (panel chrome handled by Panel.ts) */
@@ -353,15 +372,12 @@
                 <button id="nowButton" class="hidden" title="Jump Starlinks time to now">Now</button>
                 <button id="cameraOriginBtn" class="hidden" title="Toggle camera origin">Origin: Earth</button>
                 <button id="sunlightBtn" class="hidden" title="Toggle sunlight/shadow visualization">&#9728;</button>
+                <button id="legendBtn" class="hidden" title="Toggle satellite color legend" aria-pressed="false">Legend</button>
             </div>
             <button id="settingsBtn" class="icon-btn" title="Settings">&#9881;</button>
             <button id="perfBtn" class="icon-btn" title="Performance stats">&#9776;</button>
             <button id="logBtn" class="icon-btn" title="Application log (L)">&#9112;</button>
-            <select id="sceneSelect" class="scene-select" title="Scene">
-                <option value="proto-planets">Proto planets</option>
-                <option value="starlinks">Starlinks</option>
-            </select>
-            <button id="loadSceneBtn" title="Load selected scene">Load</button>
+            <button id="loadSceneBtn" title="Open scene picker">Load</button>
             <span class="spacer"></span>
             <div class="status-bar">
                 <div class="status-item">
@@ -385,7 +401,6 @@
                     <span>Time:</span>
                     <span id="simTimeDisplay" class="status-value monospace">--</span>
                 </div>
-                <span id="rendererBadge" class="renderer-badge">--</span>
             </div>
         </div>
         <div id="canvas-container">

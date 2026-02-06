@@ -344,6 +344,10 @@ export function createPerfOverlay(): HTMLElement {
                 <span class="label">Sim Rate</span>
                 <span class="value" id="perf-simrate">-- Hz</span>
             </div>
+            <div class="row">
+                <span class="label">Renderer</span>
+                <span class="value" id="perf-renderer">--</span>
+            </div>
             <div class="divider"></div>
             <div class="section-title">Frame Budget</div>
             <div class="row">
@@ -469,5 +473,18 @@ export function updatePerfOverlay(stats: PerfStats): void {
 
     if (entitiesEl) {
         entitiesEl.textContent = String(stats.entityCount)
+    }
+}
+
+export function setPerfOverlayRenderer(renderer: 'webgl' | 'canvas'): void {
+    const rendererEl = document.getElementById('perf-renderer')
+    if (!rendererEl) return
+
+    if (renderer === 'webgl') {
+        rendererEl.textContent = 'WebGL 2'
+        rendererEl.className = 'value good'
+    } else {
+        rendererEl.textContent = 'Canvas 2D'
+        rendererEl.className = 'value warn'
     }
 }

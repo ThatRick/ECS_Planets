@@ -1,7 +1,7 @@
 import Vec3 from './lib/Vector3.js';
 import { getStarlinkOrbitStatusCode } from './data/starlinkStatus.js';
 import { World, Position, Velocity, Mass, Size, Color, Temperature, EarthTag, Orbit, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, OrbitSystem, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
-import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
+import { PerfMonitor, createPerfOverlay, setPerfOverlayRenderer, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues, setGravityAlgoValue } from './SettingsPanel.js';
 import { AppLog, createLogPanel } from './AppLog.js';
 import { computeSunDirWorld, isInEarthShadow } from './lib/solar.js';
@@ -24,12 +24,12 @@ export default class App {
     world;
     bodyCountEl;
     sceneNameEl;
-    sceneSelectEl;
     loadSceneBtn;
     simTimeStatusEl;
     simTimeEl;
     nowBtn;
     cameraOriginBtn;
+    legendBtn;
     perfMonitor;
     currentGravityType = 'barnes-hut';
     currentRenderer = 'canvas';
@@ -38,7 +38,7 @@ export default class App {
     playPauseBtn;
     sharedCameraSystem;
     sharedRendererSystem = null;
-    legendEl = null;
+    legendPanel = null;
     satelliteStatusMap = new Map(); // entity ID → status code
     satelliteNoradMap = new Map(); // entity ID → NORAD ID
     satSizeM = 30_000;
@@ -46,17 +46,18 @@ export default class App {
     selectedEntity;
     infoPanel = null;
     logPanel;
+    scenePickerPanel = null;
     constructor(canvas) {
         AppLog.info('App initialization started');
         this.canvas = canvas;
         this.bodyCountEl = document.getElementById('bodyCount');
         this.sceneNameEl = document.getElementById('sceneName');
-        this.sceneSelectEl = document.getElementById('sceneSelect');
         this.loadSceneBtn = document.getElementById('loadSceneBtn');
         this.simTimeStatusEl = document.getElementById('simTimeStatus');
         this.simTimeEl = document.getElementById('simTimeDisplay');
         this.nowBtn = document.getElementById('nowButton');
         this.cameraOriginBtn = document.getElementById('cameraOriginBtn');
+        this.legendBtn = document.getElementById('legendBtn');
         this.playPauseBtn = document.getElementById('playPauseBtn');
         this.perfMonitor = new PerfMonitor();
         // Add performance overlay (hidden by default)
@@ -67,14 +68,18 @@ export default class App {
         const settingsPanel = createSettingsPanel((settings) => this.resetSimulation(settings), (gravityType) => this.switchGravitySystem(gravityType));
         document.body.appendChild(settingsPanel);
         // Add satellite status legend (hidden by default)
-        this.legendEl = this.createStarlinkLegend();
-        document.body.appendChild(this.legendEl);
+        this.legendPanel = this.createStarlinkLegend();
+        document.body.appendChild(this.legendPanel.element);
         // Add satellite info panel (hidden by default)
         this.infoPanel = this.createInfoPanel();
         document.body.appendChild(this.infoPanel.element);
         // Add log panel (hidden by default)
         this.logPanel = createLogPanel();
         document.body.appendChild(this.logPanel.element);
+        // Add scene picker popup (hidden by default)
+        this.scenePickerPanel = this.createScenePickerPanel();
+        document.body.appendChild(this.scenePickerPanel.element);
+        this.updateScenePickerState();
         // Click-to-select satellite detection
         this.setupClickSelection();
         // Set up responsive canvas
@@ -96,9 +101,10 @@ export default class App {
             this.sharedRendererSystem = createPlanetRenderer(this.canvas);
             this.currentRenderer = 'canvas';
         }
-        this.updateRendererBadge();
+        this.updateRendererIndicator();
         this.applyCameraOriginMode();
         this.updateCameraOriginButton();
+        this.setSunlightMode(true);
         // Start with the default scene (Starlinks)
         this.world = new World(60);
         this.currentScene = 'starlinks';
@@ -111,9 +117,9 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = 'Starlinks';
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = 'starlinks';
-            }
+            this.updateScenePickerState();
+            this.jumpStarlinksToNow();
+            this.startSimulationIfStopped();
             this.perfMonitor.reset();
             AppLog.info('App initialization complete');
         }).catch(err => {
@@ -128,9 +134,8 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = 'Proto planets';
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = 'proto-planets';
-            }
+            this.updateScenePickerState();
+            this.startSimulationIfStopped();
             this.perfMonitor.reset();
             AppLog.info('App initialization complete (fallback)');
         });
@@ -266,12 +271,16 @@ export default class App {
         this.perfMonitor.reset();
         AppLog.info(`Reset: ${settings.bodyCount} bodies, mode=${settings.velocityMode}, scale=${settings.velocityScale}`);
     }
-    updateRendererBadge() {
-        const badge = document.getElementById('rendererBadge');
-        if (badge) {
-            badge.textContent = this.currentRenderer === 'webgl' ? 'WebGL 2' : 'Canvas 2D';
-            badge.className = `renderer-badge ${this.currentRenderer}`;
+    updateRendererIndicator() {
+        setPerfOverlayRenderer(this.currentRenderer);
+    }
+    setSunlightMode(enabled) {
+        const renderer = this.sharedRendererSystem;
+        if (renderer) {
+            renderer.sunlightMode = enabled;
         }
+        const sunlightBtn = document.getElementById('sunlightBtn');
+        sunlightBtn?.classList.toggle('sunlight-active', enabled);
     }
     applyCameraOriginMode() {
         const renderer = this.sharedRendererSystem;
@@ -299,7 +308,14 @@ export default class App {
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks);
         this.nowBtn?.classList.toggle('hidden', !isStarlinks);
         this.cameraOriginBtn?.classList.toggle('hidden', !isStarlinks);
-        this.legendEl?.classList.toggle('hidden', !isStarlinks);
+        this.legendBtn?.classList.toggle('hidden', !isStarlinks);
+        if (isStarlinks) {
+            this.legendPanel?.show();
+        }
+        else {
+            this.legendPanel?.hide();
+        }
+        this.updateLegendButtonState();
         const sunlightBtn = document.getElementById('sunlightBtn');
         sunlightBtn?.classList.toggle('hidden', !isStarlinks);
     }
@@ -308,12 +324,13 @@ export default class App {
             id: 'starlink-legend',
             title: 'Satellite Status',
             startHidden: true,
-            closable: false,
+            closable: true,
             position: {
                 bottom: 'max(12px, env(safe-area-inset-bottom))',
                 right: 'max(12px, env(safe-area-inset-right))'
             },
-            zIndex: 10
+            zIndex: 10,
+            onClose: () => this.updateLegendButtonState()
         });
         const entries = [
             ['O', 'Operational', STARLINK_STATUS_COLORS.O],
@@ -347,7 +364,57 @@ export default class App {
                 return;
             this.toggleStatusVisibility(code, target.checked);
         });
-        return panel.element;
+        return panel;
+    }
+    createScenePickerPanel() {
+        const panel = createPanel({
+            id: 'scene-picker',
+            title: 'Load Scene',
+            startHidden: true,
+            position: {
+                top: 'max(64px, calc(env(safe-area-inset-top) + 56px))',
+                right: 'max(12px, env(safe-area-inset-right))'
+            },
+            zIndex: 20,
+            minWidth: '220px'
+        });
+        panel.content.innerHTML = `
+            <div class="scene-picker-list">
+                <button class="scene-picker-btn" data-scene="proto-planets" type="button">
+                    <span class="scene-picker-title">Proto planets</span>
+                    <span class="scene-picker-desc">Procedural n-body sandbox</span>
+                </button>
+                <button class="scene-picker-btn" data-scene="starlinks" type="button">
+                    <span class="scene-picker-title">Starlinks</span>
+                    <span class="scene-picker-desc">Live orbital constellation view</span>
+                </button>
+            </div>
+        `;
+        panel.content.addEventListener('click', (e) => {
+            const target = e.target;
+            const btn = target?.closest('button[data-scene]');
+            if (!btn)
+                return;
+            const scene = btn.dataset.scene;
+            if (!scene)
+                return;
+            panel.hide();
+            void this.loadScene(scene);
+        });
+        this.updateScenePickerState();
+        return panel;
+    }
+    updateScenePickerState() {
+        if (!this.scenePickerPanel)
+            return;
+        const buttons = this.scenePickerPanel.content.querySelectorAll('button[data-scene]');
+        buttons.forEach((btn) => {
+            const scene = btn.dataset.scene;
+            const active = scene === this.currentScene;
+            btn.classList.toggle('active', active);
+            btn.disabled = active;
+            btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+        });
     }
     toggleStatusVisibility(statusCode, visible) {
         const size = visible ? this.satSizeM : 0;
@@ -455,7 +522,13 @@ export default class App {
             return;
         if (!this.simTimeEl)
             return;
-        this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs);
+        const renderer = this.sharedRendererSystem;
+        if (renderer?.hasUserLocation) {
+            this.simTimeEl.textContent = formatLocalTimeMs(this.world.simTimeMs);
+        }
+        else {
+            this.simTimeEl.textContent = formatUtcTimeMs(this.world.simTimeMs);
+        }
     }
     jumpStarlinksToNow() {
         if (this.currentScene !== 'starlinks')
@@ -654,7 +727,6 @@ export default class App {
         if (scene === this.currentScene)
             return;
         AppLog.info(`Loading scene: ${scene}`);
-        const wasRunning = this.isRunning;
         if (this.isRunning) {
             this.world.stop();
             this.isRunning = false;
@@ -664,16 +736,7 @@ export default class App {
             this.loadSceneBtn.disabled = true;
             this.loadSceneBtn.textContent = 'Loading…';
         }
-        if (this.sceneSelectEl) {
-            this.sceneSelectEl.disabled = true;
-        }
         this.clearSelection();
-        // Reset sunlight mode
-        const renderer = this.sharedRendererSystem;
-        if (renderer)
-            renderer.sunlightMode = false;
-        const sunlightBtn = document.getElementById('sunlightBtn');
-        sunlightBtn?.classList.remove('sunlight-active');
         const newWorld = new World(scene === 'proto-planets' ? 100 : 60);
         try {
             if (scene === 'proto-planets') {
@@ -692,23 +755,18 @@ export default class App {
             if (this.sceneNameEl) {
                 this.sceneNameEl.textContent = scene === 'proto-planets' ? 'Proto planets' : 'Starlinks';
             }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.value = scene;
-            }
+            this.updateScenePickerState();
             this.perfMonitor.reset();
-            if (wasRunning) {
-                this.world.start();
-                this.isRunning = true;
-                this.updatePlayPauseButton();
+            this.setSunlightMode(true);
+            if (scene === 'starlinks') {
+                this.jumpStarlinksToNow();
             }
+            this.startSimulationIfStopped();
         }
         finally {
             if (this.loadSceneBtn) {
                 this.loadSceneBtn.disabled = false;
                 this.loadSceneBtn.textContent = 'Load';
-            }
-            if (this.sceneSelectEl) {
-                this.sceneSelectEl.disabled = false;
             }
         }
     }
@@ -758,6 +816,13 @@ export default class App {
         if (cameraOriginBtn) {
             cameraOriginBtn.addEventListener('click', () => this.cycleCameraOriginMode());
         }
+        const legendBtn = document.getElementById('legendBtn');
+        if (legendBtn) {
+            legendBtn.addEventListener('click', () => {
+                this.legendPanel?.toggle();
+                this.updateLegendButtonState();
+            });
+        }
         // Sunlight mode toggle
         const sunlightBtn = document.getElementById('sunlightBtn');
         if (sunlightBtn) {
@@ -765,8 +830,7 @@ export default class App {
                 const renderer = this.sharedRendererSystem;
                 if (!renderer)
                     return;
-                renderer.sunlightMode = !renderer.sunlightMode;
-                sunlightBtn.classList.toggle('sunlight-active', renderer.sunlightMode);
+                this.setSunlightMode(!renderer.sunlightMode);
             });
         }
         // Settings button
@@ -792,10 +856,10 @@ export default class App {
         }
         // Scene loader
         const loadSceneBtn = document.getElementById('loadSceneBtn');
-        const sceneSelect = document.getElementById('sceneSelect');
-        if (loadSceneBtn && sceneSelect) {
+        if (loadSceneBtn) {
             loadSceneBtn.addEventListener('click', () => {
-                void this.loadScene(sceneSelect.value);
+                this.updateScenePickerState();
+                this.scenePickerPanel?.show();
             });
         }
         // Keyboard shortcuts
@@ -821,6 +885,20 @@ export default class App {
                     break;
             }
         });
+    }
+    updateLegendButtonState() {
+        if (!this.legendBtn || !this.legendPanel)
+            return;
+        const isVisible = this.currentScene === 'starlinks' && this.legendPanel.isVisible();
+        this.legendBtn.classList.toggle('legend-active', isVisible);
+        this.legendBtn.setAttribute('aria-pressed', isVisible ? 'true' : 'false');
+    }
+    startSimulationIfStopped() {
+        if (this.isRunning)
+            return;
+        this.world.start();
+        this.isRunning = true;
+        this.updatePlayPauseButton();
     }
     updateBodyCount() {
         if (this.bodyCountEl) {
@@ -1248,6 +1326,39 @@ function formatUtcTimeMs(ms) {
     try {
         const iso = new Date(ms).toISOString();
         return iso.replace('T', ' ').replace(/\.\d{3}Z$/, 'Z');
+    }
+    catch {
+        return '--';
+    }
+}
+function formatLocalTimeMs(ms) {
+    if (!Number.isFinite(ms))
+        return '--';
+    try {
+        const date = new Date(ms);
+        const formatter = new Intl.DateTimeFormat(undefined, {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+            timeZoneName: 'short'
+        });
+        const parts = formatter.formatToParts(date);
+        const part = (type) => parts.find(p => p.type === type)?.value ?? '';
+        const yyyy = part('year');
+        const mm = part('month');
+        const dd = part('day');
+        const hh = part('hour');
+        const min = part('minute');
+        const sec = part('second');
+        const tz = part('timeZoneName');
+        if (!yyyy || !mm || !dd || !hh || !min || !sec) {
+            return formatter.format(date);
+        }
+        return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ''}`;
     }
     catch {
         return '--';

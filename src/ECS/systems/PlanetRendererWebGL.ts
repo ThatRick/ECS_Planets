@@ -358,6 +358,8 @@ export type PickableRenderer = System & {
     pick(screenX: number, screenY: number, world: World): number | undefined
     /** Set to an entity ID to highlight it, or undefined to clear. */
     selectedEntity: number | undefined
+    /** True when browser geolocation has produced a user position fix. */
+    readonly hasUserLocation: boolean
     /** Camera orbit target mode. */
     cameraOriginMode: CameraOriginMode
     /** Toggle sunlight/shadow visualization mode. */
@@ -697,6 +699,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
         name: 'PlanetRendererWebGL',
         phase: 'visual',
         selectedEntity: undefined,
+        get hasUserLocation(): boolean { return hasUserLocation > 0 },
         get cameraOriginMode(): CameraOriginMode { return cameraOriginMode },
         set cameraOriginMode(v: CameraOriginMode) { cameraOriginMode = v },
         get sunlightMode(): boolean { return sunlightModeEnabled },
@@ -1028,6 +1031,12 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                         }
                     }
 
+                    if (renderer.selectedEntity !== undefined && id === renderer.selectedEntity) {
+                        r = 1.0
+                        g = 1.0
+                        b = 1.0
+                    }
+
                     instanceData[offset++] = pos.x
                     instanceData[offset++] = pos.y
                     instanceData[offset++] = pos.z
@@ -1054,42 +1063,6 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                     gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0)
 
                     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonEarthCount)
-                }
-
-                // Draw selection highlight ring (drawn after satellites, before Earth)
-                if (renderer.selectedEntity !== undefined && world.hasComponent(renderer.selectedEntity, Position)) {
-                    const selPos = world.getComponent(renderer.selectedEntity, Position)!
-                    const selSize = world.getComponent(renderer.selectedEntity, Size)
-                    if (selSize !== undefined && selSize > 0) {
-                        // Ring: larger billboard with bright color, rendered with blending
-                        const ringScale = 2.0
-                        instanceData[0] = selPos.x
-                        instanceData[1] = selPos.y
-                        instanceData[2] = selPos.z
-                        instanceData[3] = selSize * ringScale
-                        instanceData[4] = 0.2 // bright blue
-                        instanceData[5] = 0.55
-                        instanceData[6] = 1.0
-
-                        gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer)
-                        gl.bufferSubData(gl.ARRAY_BUFFER, 0, instanceData.subarray(0, INSTANCE_STRIDE))
-
-                        // Draw highlight as an overlay to avoid z-fighting with the selected satellite sprite.
-                        gl.disable(gl.DEPTH_TEST)
-                        gl.depthMask(false)
-                        gl.useProgram(bodyProgram)
-                        gl.bindVertexArray(vaoBody)
-                        gl.uniform2f(bodyUniforms.resolution, width, height)
-                        gl.uniformMatrix4fv(bodyUniforms.viewMatrix, false, viewMatrix)
-                        gl.uniformMatrix4fv(bodyUniforms.projMatrix, false, projMatrix)
-                        gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ)
-                        gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ)
-                        gl.uniform1f(bodyUniforms.minPixelSize, 8.0) // ensure ring is visible
-                        gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0)
-                        gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1)
-                        gl.depthMask(true)
-                        gl.enable(gl.DEPTH_TEST)
-                    }
                 }
 
                 // Draw Earth-tagged bodies last (grid + user marker)
@@ -1202,6 +1175,12 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                     b = tmpRgb[2]
                 }
 
+                if (renderer.selectedEntity !== undefined && id === renderer.selectedEntity) {
+                    r = 1.0
+                    g = 1.0
+                    b = 1.0
+                }
+
                 instanceData[offset++] = pos.x
                 instanceData[offset++] = pos.y
                 instanceData[offset++] = pos.z
@@ -1246,6 +1225,12 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                     r = tmpRgb[0]
                     g = tmpRgb[1]
                     b = tmpRgb[2]
+                }
+
+                if (renderer.selectedEntity !== undefined && largestId === renderer.selectedEntity) {
+                    r = 1.0
+                    g = 1.0
+                    b = 1.0
                 }
 
                 instanceData[0] = pos.x

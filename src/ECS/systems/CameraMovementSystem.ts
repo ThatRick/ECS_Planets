@@ -32,7 +32,7 @@ export function createCameraMovementSystem(canvas: HTMLCanvasElement): System {
     const minPhi = -Math.PI / 2 + 0.1  // Prevent gimbal lock at poles
     const maxPhi = Math.PI / 2 - 0.1
     const minZoom = 0.1
-    const maxZoom = 5.0
+    const maxZoom = 20.0
     const minDistance = 100
     const maxDistance = 1e9
 
