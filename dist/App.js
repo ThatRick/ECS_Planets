@@ -1,5 +1,5 @@
 import Vec3 from './lib/Vector3.js';
-import { getStarlinkOrbitStatusCode } from './data/starlinkStatus.js';
+import { getStarlinkLaunchDateUtc, getStarlinkOrbitStatusCode } from './data/starlinkStatus.js';
 import { World, Position, Velocity, Mass, Size, Color, Temperature, EarthTag, Orbit, CameraComponent, PhysicsConfig, GravitySystemSimple, GravitySystemBarnesHut, OrbitSystem, createCameraMovementSystem, createPlanetRenderer, createPlanetRendererWebGL, isWebGL2Available } from './ECS/index.js';
 import { PerfMonitor, createPerfOverlay, setPerfOverlayRenderer, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js';
 import { createSettingsPanel, toggleSettingsPanel, updateSettingsPanelValues, setGravityAlgoValue } from './SettingsPanel.js';
@@ -346,14 +346,26 @@ export default class App {
             ['f', 'Failed orbit', STARLINK_STATUS_COLORS.f],
             ['G', 'Graveyard', STARLINK_STATUS_COLORS.G],
         ];
-        let html = '';
+        let html = `
+            <div class="legend-controls">
+                <button class="legend-action-btn" type="button" data-action="select-all">All</button>
+                <button class="legend-action-btn" type="button" data-action="select-none">None</button>
+            </div>
+            <div class="legend-quick-links">
+                <a href="#" data-action="select-lowest">Lowest satellite</a>
+                <a href="#" data-action="select-highest">Highest satellite</a>
+                <a href="#" data-action="select-oldest">Oldest satellite</a>
+                <a href="#" data-action="select-norad">By NORAD ID</a>
+            </div>
+        `;
         for (const [code, label, color] of entries) {
             const r = Math.round(color.x * 255);
             const g = Math.round(color.y * 255);
             const b = Math.round(color.z * 255);
-            html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span>${label}</label>`;
+            html += `<label class="legend-entry"><input type="checkbox" checked data-status="${code}"><span class="legend-dot" style="background:rgb(${r},${g},${b})"></span><span class="legend-label">${label} <span class="legend-count" data-status-count="${code}">(0)</span></span></label>`;
         }
         panel.content.innerHTML = html;
+        this.updateLegendStatusCounts();
         // Wire up checkbox filtering
         panel.content.addEventListener('change', (e) => {
             const target = e.target;
@@ -363,6 +375,38 @@ export default class App {
             if (!code)
                 return;
             this.toggleStatusVisibility(code, target.checked);
+        });
+        panel.content.addEventListener('click', (e) => {
+            const target = e.target;
+            const el = target?.closest('[data-action]');
+            if (!el)
+                return;
+            const action = el.dataset.action;
+            if (!action)
+                return;
+            if (el instanceof HTMLAnchorElement) {
+                e.preventDefault();
+            }
+            switch (action) {
+                case 'select-all':
+                    this.setLegendStatusVisibilityForAll(true);
+                    break;
+                case 'select-none':
+                    this.setLegendStatusVisibilityForAll(false);
+                    break;
+                case 'select-lowest':
+                    this.selectLowestStarlinkSatellite();
+                    break;
+                case 'select-highest':
+                    this.selectHighestStarlinkSatellite();
+                    break;
+                case 'select-oldest':
+                    this.selectOldestStarlinkSatellite();
+                    break;
+                case 'select-norad':
+                    this.promptSelectStarlinkByNoradId();
+                    break;
+            }
         });
         return panel;
     }
@@ -423,6 +467,142 @@ export default class App {
                 this.world.addComponent(entityId, Size, size);
             }
         }
+    }
+    updateLegendStatusCounts() {
+        if (!this.legendPanel)
+            return;
+        const counts = {};
+        for (const status of this.satelliteStatusMap.values()) {
+            counts[status] = (counts[status] ?? 0) + 1;
+        }
+        const countEls = this.legendPanel.content.querySelectorAll('[data-status-count]');
+        countEls.forEach((el) => {
+            const statusCode = el.dataset.statusCount;
+            if (!statusCode)
+                return;
+            el.textContent = `(${counts[statusCode] ?? 0})`;
+        });
+    }
+    setLegendStatusVisibilityForAll(visible) {
+        if (!this.legendPanel)
+            return;
+        const checkboxes = this.legendPanel.content.querySelectorAll('input[type="checkbox"][data-status]');
+        checkboxes.forEach((checkbox) => {
+            const statusCode = checkbox.dataset.status;
+            if (!statusCode)
+                return;
+            checkbox.checked = visible;
+            this.toggleStatusVisibility(statusCode, visible);
+        });
+    }
+    selectStarlinkSatellite(entityId) {
+        const renderer = this.sharedRendererSystem;
+        this.selectedEntity = entityId;
+        if (renderer)
+            renderer.selectedEntity = entityId;
+        this.updateInfoPanel(entityId);
+    }
+    findExtremeAltitudeStarlinkEntity(selectHighest) {
+        let match;
+        let bestRadiusSq = selectHighest ? -Infinity : Infinity;
+        for (const entityId of this.satelliteStatusMap.keys()) {
+            const pos = this.world.getComponent(entityId, Position);
+            if (!pos)
+                continue;
+            const radiusSq = (pos.x * pos.x) + (pos.y * pos.y) + (pos.z * pos.z);
+            if ((selectHighest && radiusSq > bestRadiusSq) || (!selectHighest && radiusSq < bestRadiusSq)) {
+                bestRadiusSq = radiusSq;
+                match = entityId;
+            }
+        }
+        return match;
+    }
+    findOldestStarlinkEntity() {
+        let match;
+        let bestLaunchMs = Infinity;
+        for (const [entityId, noradId] of this.satelliteNoradMap) {
+            if (!Number.isFinite(noradId) || noradId <= 0)
+                continue;
+            const launchDate = getStarlinkLaunchDateUtc(noradId);
+            if (!launchDate)
+                continue;
+            const launchMs = Date.parse(`${launchDate}T00:00:00Z`);
+            if (!Number.isFinite(launchMs))
+                continue;
+            if (launchMs < bestLaunchMs) {
+                bestLaunchMs = launchMs;
+                match = entityId;
+            }
+        }
+        if (match !== undefined) {
+            return match;
+        }
+        // Fallback for missing launch dates: pick lowest NORAD ID.
+        let fallbackNorad = Infinity;
+        for (const [entityId, noradId] of this.satelliteNoradMap) {
+            if (!Number.isFinite(noradId) || noradId <= 0)
+                continue;
+            if (noradId < fallbackNorad) {
+                fallbackNorad = noradId;
+                match = entityId;
+            }
+        }
+        return match;
+    }
+    findSatelliteByNoradId(noradId) {
+        for (const [entityId, id] of this.satelliteNoradMap) {
+            if (id === noradId)
+                return entityId;
+        }
+        return undefined;
+    }
+    selectLowestStarlinkSatellite() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        const match = this.findExtremeAltitudeStarlinkEntity(false);
+        if (match === undefined) {
+            AppLog.warn('No Starlink satellites available for lowest selection.');
+            return;
+        }
+        this.selectStarlinkSatellite(match);
+    }
+    selectHighestStarlinkSatellite() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        const match = this.findExtremeAltitudeStarlinkEntity(true);
+        if (match === undefined) {
+            AppLog.warn('No Starlink satellites available for highest selection.');
+            return;
+        }
+        this.selectStarlinkSatellite(match);
+    }
+    selectOldestStarlinkSatellite() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        const match = this.findOldestStarlinkEntity();
+        if (match === undefined) {
+            AppLog.warn('Could not determine an oldest Starlink satellite.');
+            return;
+        }
+        this.selectStarlinkSatellite(match);
+    }
+    promptSelectStarlinkByNoradId() {
+        if (this.currentScene !== 'starlinks')
+            return;
+        const raw = window.prompt('Enter NORAD ID');
+        if (raw === null)
+            return;
+        const noradId = Number.parseInt(raw.trim(), 10);
+        if (!Number.isFinite(noradId) || noradId <= 0) {
+            AppLog.warn(`Invalid NORAD ID: ${raw}`);
+            return;
+        }
+        const match = this.findSatelliteByNoradId(noradId);
+        if (match === undefined) {
+            AppLog.warn(`NORAD ID ${noradId} not found in loaded satellites.`);
+            return;
+        }
+        this.selectStarlinkSatellite(match);
     }
     createInfoPanel() {
         return createPanel({
@@ -721,6 +901,7 @@ export default class App {
         if (this.sharedRendererSystem) {
             world.registerSystem(this.sharedRendererSystem);
         }
+        this.updateLegendStatusCounts();
         AppLog.info(`Starlinks scene loaded (${created} satellites)`);
     }
     async loadScene(scene) {

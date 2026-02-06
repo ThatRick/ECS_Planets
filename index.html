@@ -177,6 +177,50 @@
             color: #ccc;
         }
 
+        .legend-controls {
+            display: flex;
+            gap: 6px;
+            margin: 0 0 8px 0;
+        }
+
+        .legend-action-btn {
+            flex: 1;
+            min-width: 0;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: #2a2a2a;
+            color: #ddd;
+            font-size: 11px;
+            line-height: 1.2;
+            padding: 5px 6px;
+            cursor: pointer;
+        }
+
+        .legend-action-btn:hover {
+            border-color: #79a4c2;
+            color: #fff;
+        }
+
+        .legend-quick-links {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 3px;
+            margin: 0 0 8px 0;
+            font-size: 11px;
+        }
+
+        .legend-quick-links a {
+            color: #9fd6ff;
+            text-decoration: underline;
+            text-underline-offset: 2px;
+            cursor: pointer;
+        }
+
+        .legend-quick-links a:hover {
+            color: #d5efff;
+        }
+
         .legend-entry {
             display: flex;
             align-items: center;
@@ -206,6 +250,17 @@
             height: 10px;
             border-radius: 50%;
             flex-shrink: 0;
+        }
+
+        .legend-label {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 4px;
+        }
+
+        .legend-count {
+            color: #9ba5b1;
+            font-variant-numeric: tabular-nums;
         }
 
         /* Scene picker content styles (panel chrome handled by Panel.ts) */
