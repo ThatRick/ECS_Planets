@@ -532,7 +532,7 @@ export default class App {
         this.satSizeM = SAT_SIZE_M;
         this.satelliteStatusMap.clear();
         this.satelliteNoradMap.clear();
-        world.timeFactor = 100;
+        world.timeFactor = 1;
         world.simTimeMs = Date.now();
         // Camera focused on Earth
         const cameraEntity = world.createEntity();
@@ -555,15 +555,6 @@ export default class App {
             const candidates = await fetchStarlinkOrbits(MU_EARTH, MAX_SATELLITES);
             // Deterministic-ish shuffle so we don't bias toward any ordering
             shuffleInPlace(candidates);
-            // Start simulation time from the dataset epoch (use the newest epoch across the set)
-            let startEpochMs = 0;
-            for (const o of candidates) {
-                if (Number.isFinite(o.epochMs) && o.epochMs > startEpochMs)
-                    startEpochMs = o.epochMs;
-            }
-            if (startEpochMs > 0) {
-                world.simTimeMs = startEpochMs;
-            }
             for (let i = 0; i < candidates.length && created < MAX_SATELLITES; i++) {
                 const orbit = candidates[i];
                 const entity = world.createEntity();

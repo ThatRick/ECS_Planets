@@ -20,11 +20,15 @@ uniform mat4 u_projMatrix;
 uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
 uniform float u_minPixelSize;  // Minimum size in pixels (typically 1.0)
+uniform float u_perspectiveSphere; // 0 or 1: inflate billboard to sphere silhouette
 
 // Varyings to fragment shader
 out vec2 v_uv;
 out vec3 v_color;
 out float v_depth;
+out float v_viewDist;
+out float v_radius;
+out float v_effectiveSize;
 
 void main() {
     // Pass to fragment shader
@@ -44,6 +48,13 @@ void main() {
     // Use the larger of actual size or minimum size
     float effectiveSize = max(a_size, minWorldSize);
 
+    // Billboard quads under-project large nearby spheres.
+    // Inflate Earth's quad so its edge matches true perspective silhouette.
+    if (u_perspectiveSphere > 0.5 && a_size > 0.0 && viewDist > a_size + 1.0) {
+        float denom = max(viewDist * viewDist - a_size * a_size, 1.0);
+        effectiveSize *= viewDist / sqrt(denom);
+    }
+
     // Billboard: offset from center using camera-aligned axes
     vec3 worldPos = a_position + u_cameraRight * a_vertex.x * effectiveSize + u_cameraUp * a_vertex.y * effectiveSize;
 
@@ -53,6 +64,9 @@ void main() {
 
     // Pass depth for potential depth-based effects
     v_depth = -viewPos.z;
+    v_viewDist = viewDist;
+    v_radius = a_size;
+    v_effectiveSize = effectiveSize;
 }
 `;
 // Fragment shader - renders sphere-like shading with per-instance color
@@ -104,10 +118,14 @@ precision highp float;
 in vec2 v_uv;
 in vec3 v_color;
 in float v_depth;
+in float v_viewDist;
+in float v_radius;
+in float v_effectiveSize;
 
 uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
 uniform vec3 u_cameraForward;
+uniform mat4 u_projMatrix;
 
 uniform vec3 u_userDirWorld;      // normalized
 uniform float u_hasUserLocation;  // 0 or 1
@@ -138,14 +156,30 @@ void main() {
     float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
     if (alpha < 0.01) discard;
 
-    float z = sqrt(1.0 - distSq);
-    vec3 normalLocal = normalize(vec3(v_uv, z));
+    // Perspective-correct sphere intersection in view space.
+    vec3 centerView = vec3(0.0, 0.0, -v_viewDist);
+    vec3 planePoint = vec3(v_uv.x * v_effectiveSize, v_uv.y * v_effectiveSize, -v_viewDist);
+    vec3 rayDir = normalize(planePoint);
+    float b = dot(rayDir, centerView);
+    float c = dot(centerView, centerView) - v_radius * v_radius;
+    float h = b * b - c;
+    if (h <= 0.0) discard;
+    float t = b - sqrt(h);
+    if (t <= 0.0) discard;
+
+    vec3 viewPos = rayDir * t;
+    vec3 normalView = normalize(viewPos - centerView);
+
+    // Write sphere depth so Earth/satellite perspective occlusion matches.
+    vec4 clip = u_projMatrix * vec4(viewPos, 1.0);
+    float ndcDepth = clip.z / clip.w;
+    gl_FragDepth = ndcDepth * 0.5 + 0.5;
 
     // Map the visible hemisphere to world directions so the grid is anchored to world axes.
     vec3 normalWorld = normalize(
-        u_cameraRight * normalLocal.x +
-        u_cameraUp * normalLocal.y +
-        u_cameraForward * normalLocal.z
+        u_cameraRight * normalView.x +
+        u_cameraUp * normalView.y +
+        u_cameraForward * normalView.z
     );
 
     float lat = asin(clamp(normalWorld.y, -1.0, 1.0));
@@ -181,8 +215,8 @@ void main() {
             dot(u_sunDirWorld, u_cameraUp),
             dot(u_sunDirWorld, u_cameraForward)
         ));
-        vec3 viewDir = vec3(0.0, 0.0, 1.0);
-        vec3 reflectDir = reflect(-sunDirLocal, normalLocal);
+        vec3 viewDir = normalize(-viewPos);
+        vec3 reflectDir = reflect(-sunDirLocal, normalView);
         float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
 
         dayColor += spec * 0.2;
@@ -194,9 +228,9 @@ void main() {
     } else {
         // Original fixed view-space lighting
         vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
-        float diffuse = max(dot(normalLocal, lightDir), 0.0);
-        vec3 viewDir = vec3(0.0, 0.0, 1.0);
-        vec3 reflectDir = reflect(-lightDir, normalLocal);
+        float diffuse = max(dot(normalView, lightDir), 0.0);
+        vec3 viewDir = normalize(-viewPos);
+        vec3 reflectDir = reflect(-lightDir, normalView);
         float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
 
         col = baseColor * (0.28 + diffuse * 0.72);
@@ -238,22 +272,22 @@ void main() {
     }
     col = mix(col, vec3(0.95, 0.95, 1.0), grid * gridAlpha);
 
-    // User location marker (red with a thin white ring)
+    // User location marker (blue center with a thin white ring)
     if (u_hasUserLocation > 0.5) {
         // Angular distance from user location (0 = exactly there, grows with distance)
         float markerDot = dot(normalWorld, u_userDirWorld);
         float angDist = acos(clamp(markerDot, -1.0, 1.0));
         float aaAng = max(fwidth(angDist), 1e-5);
 
-        // Fixed angular radius (~3 degrees outer, ~2 degrees inner)
-        float outerR = 0.052;
-        float innerR = 0.035;
+        // Fixed angular radius scaled to 50%
+        float outerR = 0.026;
+        float innerR = 0.0175;
         float outer = 1.0 - smoothstep(outerR - aaAng, outerR + aaAng, angDist);
         float inner = 1.0 - smoothstep(innerR - aaAng, innerR + aaAng, angDist);
         float ring = max(0.0, outer - inner);
 
         col = mix(col, vec3(1.0), ring);
-        col = mix(col, vec3(1.0, 0.2, 0.15), inner);
+        col = mix(col, vec3(0.2, 0.55, 1.0), inner);
     }
 
     // Premultiplied alpha to avoid dark fringe at edges
@@ -311,7 +345,8 @@ export function createPlanetRendererWebGL(canvas) {
         projMatrix: gl.getUniformLocation(bodyProgram, 'u_projMatrix'),
         cameraRight: gl.getUniformLocation(bodyProgram, 'u_cameraRight'),
         cameraUp: gl.getUniformLocation(bodyProgram, 'u_cameraUp'),
-        minPixelSize: gl.getUniformLocation(bodyProgram, 'u_minPixelSize')
+        minPixelSize: gl.getUniformLocation(bodyProgram, 'u_minPixelSize'),
+        perspectiveSphere: gl.getUniformLocation(bodyProgram, 'u_perspectiveSphere')
     };
     const earthAttribs = {
         vertex: gl.getAttribLocation(earthProgram, 'a_vertex'),
@@ -327,6 +362,7 @@ export function createPlanetRendererWebGL(canvas) {
         cameraUp: gl.getUniformLocation(earthProgram, 'u_cameraUp'),
         cameraForward: gl.getUniformLocation(earthProgram, 'u_cameraForward'),
         minPixelSize: gl.getUniformLocation(earthProgram, 'u_minPixelSize'),
+        perspectiveSphere: gl.getUniformLocation(earthProgram, 'u_perspectiveSphere'),
         userDirWorld: gl.getUniformLocation(earthProgram, 'u_userDirWorld'),
         hasUserLocation: gl.getUniformLocation(earthProgram, 'u_hasUserLocation'),
         earthTexture: gl.getUniformLocation(earthProgram, 'u_earthTexture'),
@@ -738,6 +774,7 @@ export function createPlanetRendererWebGL(canvas) {
                     gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
                     gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                     gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                    gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0);
                     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonEarthCount);
                 }
                 // Draw selection highlight ring (drawn after satellites, before Earth)
@@ -764,6 +801,7 @@ export function createPlanetRendererWebGL(canvas) {
                         gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
                         gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                         gl.uniform1f(bodyUniforms.minPixelSize, 8.0); // ensure ring is visible
+                        gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0);
                         gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1);
                     }
                 }
@@ -807,6 +845,7 @@ export function createPlanetRendererWebGL(canvas) {
                 gl.uniform3f(earthUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                 gl.uniform3f(earthUniforms.cameraForward, -fwdX, -fwdY, -fwdZ);
                 gl.uniform1f(earthUniforms.minPixelSize, minPixelSize);
+                gl.uniform1f(earthUniforms.perspectiveSphere, 1.0);
                 gl.uniform3f(earthUniforms.userDirWorld, userDirWorld[0], userDirWorld[1], userDirWorld[2]);
                 gl.uniform1f(earthUniforms.hasUserLocation, hasUserLocation);
                 // Sunlight mode uniforms
@@ -878,6 +917,7 @@ export function createPlanetRendererWebGL(canvas) {
                 gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
                 gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                 gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0);
                 gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, nonLargestCount);
             }
             if (largestId !== undefined) {
@@ -914,6 +954,7 @@ export function createPlanetRendererWebGL(canvas) {
                 gl.uniform3f(bodyUniforms.cameraRight, rightX, rightY, rightZ);
                 gl.uniform3f(bodyUniforms.cameraUp, actualUpX, actualUpY, actualUpZ);
                 gl.uniform1f(bodyUniforms.minPixelSize, minPixelSize);
+                gl.uniform1f(bodyUniforms.perspectiveSphere, 0.0);
                 gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, 1);
             }
             gl.bindVertexArray(null);
