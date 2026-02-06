@@ -19,7 +19,8 @@ import {
     createPlanetRenderer,
     createPlanetRendererWebGL,
     isWebGL2Available,
-    type PickableRenderer
+    type PickableRenderer,
+    type CameraOriginMode
 } from './ECS/index.js'
 import { PerfMonitor, createPerfOverlay, updatePerfOverlay, togglePerfOverlay } from './PerfMonitor.js'
 import { createSettingsPanel, SimSettings, toggleSettingsPanel, updateSettingsPanelValues, VelocityMode, setGravityAlgoValue } from './SettingsPanel.js'
@@ -41,6 +42,12 @@ const GRAVITY_SYSTEMS: Record<GravityType, System> = {
 // Unit conversions (matching SettingsPanel)
 const KM_TO_M = 1000
 const MASS_UNIT = 1e14
+const CAMERA_ORIGIN_CYCLE: CameraOriginMode[] = ['earth-center', 'user-location', 'selected-satellite']
+const CAMERA_ORIGIN_LABEL: Record<CameraOriginMode, string> = {
+    'earth-center': 'Earth',
+    'user-location': 'User',
+    'selected-satellite': 'Selected'
+}
 
 export default class App {
     canvas: HTMLCanvasElement
@@ -52,6 +59,7 @@ export default class App {
     private simTimeStatusEl: HTMLElement | null
     private simTimeEl: HTMLElement | null
     private nowBtn: HTMLButtonElement | null
+    private cameraOriginBtn: HTMLButtonElement | null
     private perfMonitor: PerfMonitor
     private currentGravityType: GravityType = 'barnes-hut'
     private currentRenderer: RendererType = 'canvas'
@@ -64,6 +72,7 @@ export default class App {
     private satelliteStatusMap: Map<number, string> = new Map()  // entity ID → status code
     private satelliteNoradMap: Map<number, number> = new Map()   // entity ID → NORAD ID
     private satSizeM: number = 30_000
+    private cameraOriginMode: CameraOriginMode = 'earth-center'
     private selectedEntity: number | undefined
     private infoPanel: PanelHandle | null = null
     private logPanel: PanelHandle
@@ -78,6 +87,7 @@ export default class App {
         this.simTimeStatusEl = document.getElementById('simTimeStatus')
         this.simTimeEl = document.getElementById('simTimeDisplay')
         this.nowBtn = document.getElementById('nowButton') as HTMLButtonElement | null
+        this.cameraOriginBtn = document.getElementById('cameraOriginBtn') as HTMLButtonElement | null
         this.playPauseBtn = document.getElementById('playPauseBtn')
         this.perfMonitor = new PerfMonitor()
 
@@ -129,6 +139,8 @@ export default class App {
             this.currentRenderer = 'canvas'
         }
         this.updateRendererBadge()
+        this.applyCameraOriginMode()
+        this.updateCameraOriginButton()
 
         // Start with the default scene (Starlinks)
         this.world = new World(60)
@@ -360,10 +372,33 @@ export default class App {
         }
     }
 
+    private applyCameraOriginMode(): void {
+        const renderer = this.sharedRendererSystem as (PickableRenderer & { cameraOriginMode?: CameraOriginMode }) | null
+        if (!renderer) return
+        renderer.cameraOriginMode = this.cameraOriginMode
+    }
+
+    private updateCameraOriginButton(): void {
+        if (!this.cameraOriginBtn) return
+        const label = CAMERA_ORIGIN_LABEL[this.cameraOriginMode]
+        this.cameraOriginBtn.textContent = `Origin: ${label}`
+        this.cameraOriginBtn.title = `Camera origin: ${label} (toggle)`
+    }
+
+    private cycleCameraOriginMode(): void {
+        const idx = CAMERA_ORIGIN_CYCLE.indexOf(this.cameraOriginMode)
+        const nextIdx = (idx + 1) % CAMERA_ORIGIN_CYCLE.length
+        this.cameraOriginMode = CAMERA_ORIGIN_CYCLE[nextIdx]
+        this.applyCameraOriginMode()
+        this.updateCameraOriginButton()
+        AppLog.info(`Camera origin set to ${CAMERA_ORIGIN_LABEL[this.cameraOriginMode]}`)
+    }
+
     private updateStarlinksTimeUiVisibility(): void {
         const isStarlinks = this.currentScene === 'starlinks'
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks)
         this.nowBtn?.classList.toggle('hidden', !isStarlinks)
+        this.cameraOriginBtn?.classList.toggle('hidden', !isStarlinks)
         this.legendEl?.classList.toggle('hidden', !isStarlinks)
         const sunlightBtn = document.getElementById('sunlightBtn')
         sunlightBtn?.classList.toggle('hidden', !isStarlinks)
@@ -889,6 +924,11 @@ export default class App {
         const nowBtn = document.getElementById('nowButton')
         if (nowBtn) {
             nowBtn.addEventListener('click', () => this.jumpStarlinksToNow())
+        }
+
+        const cameraOriginBtn = document.getElementById('cameraOriginBtn')
+        if (cameraOriginBtn) {
+            cameraOriginBtn.addEventListener('click', () => this.cycleCameraOriginMode())
         }
 
         // Sunlight mode toggle

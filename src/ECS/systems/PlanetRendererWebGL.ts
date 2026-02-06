@@ -32,6 +32,7 @@ out float v_depth;
 out float v_viewDist;
 out float v_radius;
 out float v_effectiveSize;
+out vec3 v_centerView;
 
 void main() {
     // Pass to fragment shader
@@ -70,6 +71,7 @@ void main() {
     v_viewDist = viewDist;
     v_radius = a_size;
     v_effectiveSize = effectiveSize;
+    v_centerView = viewCenter.xyz;
 }
 `
 
@@ -126,6 +128,7 @@ in float v_depth;
 in float v_viewDist;
 in float v_radius;
 in float v_effectiveSize;
+in vec3 v_centerView;
 
 uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
@@ -162,8 +165,8 @@ void main() {
     if (alpha < 0.01) discard;
 
     // Perspective-correct sphere intersection in view space.
-    vec3 centerView = vec3(0.0, 0.0, -v_viewDist);
-    vec3 planePoint = vec3(v_uv.x * v_effectiveSize, v_uv.y * v_effectiveSize, -v_viewDist);
+    vec3 centerView = v_centerView;
+    vec3 planePoint = centerView + vec3(v_uv.x * v_effectiveSize, v_uv.y * v_effectiveSize, 0.0);
     vec3 rayDir = normalize(planePoint);
     float b = dot(rayDir, centerView);
     float c = dot(centerView, centerView) - v_radius * v_radius;
@@ -311,9 +314,13 @@ export type PickableRenderer = System & {
     pick(screenX: number, screenY: number, world: World): number | undefined
     /** Set to an entity ID to highlight it, or undefined to clear. */
     selectedEntity: number | undefined
+    /** Camera orbit target mode. */
+    cameraOriginMode: CameraOriginMode
     /** Toggle sunlight/shadow visualization mode. */
     sunlightMode: boolean
 }
+
+export type CameraOriginMode = 'earth-center' | 'user-location' | 'selected-satellite'
 
 /**
  * Factory to create a WebGL-based 3D planet renderer.
@@ -483,6 +490,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
     // Sunlight mode state
     let sunlightModeEnabled = false
     const sunDirWorld = new Float32Array([1, 0, 0])
+    let cameraOriginMode: CameraOriginMode = 'earth-center'
 
     // Optional user-location marker (requested only when an Earth-tagged body exists)
     let userLocationRequested = false
@@ -552,6 +560,8 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
         name: 'PlanetRendererWebGL',
         phase: 'visual',
         selectedEntity: undefined,
+        get cameraOriginMode(): CameraOriginMode { return cameraOriginMode },
+        set cameraOriginMode(v: CameraOriginMode) { cameraOriginMode = v },
         get sunlightMode(): boolean { return sunlightModeEnabled },
         set sunlightMode(v: boolean) { sunlightModeEnabled = v },
 
@@ -669,18 +679,57 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
             if (cameraEntity === undefined) return
             const camera = world.getComponent(cameraEntity, CameraComponent)!
 
+            const earthEntities = world.query(Position, Size, EarthTag)
+            const earthCount = Math.min(earthEntities.length, MAX_INSTANCES)
+            let earthX = 0
+            let earthY = 0
+            let earthZ = 0
+            let earthRadius = 0
+            if (earthEntities.length > 0) {
+                const earthPos = world.getComponent(earthEntities[0], Position)!
+                earthX = earthPos.x
+                earthY = earthPos.y
+                earthZ = earthPos.z
+                earthRadius = world.getComponent(earthEntities[0], Size) ?? 0
+                if (cameraOriginMode === 'user-location') {
+                    requestUserLocation()
+                }
+            }
+
+            let targetX = 0
+            let targetY = 0
+            let targetZ = 0
+            if (
+                cameraOriginMode === 'selected-satellite' &&
+                renderer.selectedEntity !== undefined &&
+                world.hasComponent(renderer.selectedEntity, Position)
+            ) {
+                const selectedPos = world.getComponent(renderer.selectedEntity, Position)!
+                targetX = selectedPos.x
+                targetY = selectedPos.y
+                targetZ = selectedPos.z
+            } else if (earthEntities.length > 0) {
+                if (cameraOriginMode === 'user-location' && hasUserLocation && earthRadius > 0) {
+                    targetX = earthX + userDirWorld[0] * earthRadius
+                    targetY = earthY + userDirWorld[1] * earthRadius
+                    targetZ = earthZ + userDirWorld[2] * earthRadius
+                } else {
+                    targetX = earthX
+                    targetY = earthY
+                    targetZ = earthZ
+                }
+            }
+
             // Calculate camera position from spherical coordinates
             const cosPhi = Math.cos(camera.phi)
             const sinPhi = Math.sin(camera.phi)
             const cosTheta = Math.cos(camera.theta)
             const sinTheta = Math.sin(camera.theta)
 
-            const camX = camera.distance * cosPhi * sinTheta
-            const camY = camera.distance * sinPhi
-            const camZ = camera.distance * cosPhi * cosTheta
+            const camX = targetX + camera.distance * cosPhi * sinTheta
+            const camY = targetY + camera.distance * sinPhi
+            const camZ = targetZ + camera.distance * cosPhi * cosTheta
 
-            // Camera looks at origin
-            const targetX = 0, targetY = 0, targetZ = 0
             const upX = 0, upY = 1, upZ = 0
 
             // Calculate camera basis vectors (for billboarding)
@@ -755,9 +804,6 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
             gl.clearColor(0, 0, 0, 1)
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
-            const earthEntities = world.query(Position, Size, EarthTag)
-            const earthCount = Math.min(earthEntities.length, MAX_INSTANCES)
-
             const minPixelSize = 1.0
 
             // If an Earth-tagged body exists, render it last with the Earth shader (grid + marker),
@@ -768,9 +814,7 @@ export function createPlanetRendererWebGL(canvas: HTMLCanvasElement): PickableRe
                 let userIsInDarkness = false
                 if (sunlightModeEnabled) {
                     computeSunDirWorld(world.simTimeMs, sunDirWorld)
-                    if (earthEntities.length > 0) {
-                        shadowEarthRadius = world.getComponent(earthEntities[0], Size) ?? 0
-                    }
+                    shadowEarthRadius = earthRadius
                     // Check if the user's location is on the night side (sun below horizon)
                     // dot(userDir, sunDir) < ~-0.1 means sun is well below horizon (~6° civil twilight)
                     if (hasUserLocation) {

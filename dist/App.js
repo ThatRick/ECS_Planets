@@ -13,6 +13,12 @@ const GRAVITY_SYSTEMS = {
 // Unit conversions (matching SettingsPanel)
 const KM_TO_M = 1000;
 const MASS_UNIT = 1e14;
+const CAMERA_ORIGIN_CYCLE = ['earth-center', 'user-location', 'selected-satellite'];
+const CAMERA_ORIGIN_LABEL = {
+    'earth-center': 'Earth',
+    'user-location': 'User',
+    'selected-satellite': 'Selected'
+};
 export default class App {
     canvas;
     world;
@@ -23,6 +29,7 @@ export default class App {
     simTimeStatusEl;
     simTimeEl;
     nowBtn;
+    cameraOriginBtn;
     perfMonitor;
     currentGravityType = 'barnes-hut';
     currentRenderer = 'canvas';
@@ -35,6 +42,7 @@ export default class App {
     satelliteStatusMap = new Map(); // entity ID → status code
     satelliteNoradMap = new Map(); // entity ID → NORAD ID
     satSizeM = 30_000;
+    cameraOriginMode = 'earth-center';
     selectedEntity;
     infoPanel = null;
     logPanel;
@@ -48,6 +56,7 @@ export default class App {
         this.simTimeStatusEl = document.getElementById('simTimeStatus');
         this.simTimeEl = document.getElementById('simTimeDisplay');
         this.nowBtn = document.getElementById('nowButton');
+        this.cameraOriginBtn = document.getElementById('cameraOriginBtn');
         this.playPauseBtn = document.getElementById('playPauseBtn');
         this.perfMonitor = new PerfMonitor();
         // Add performance overlay (hidden by default)
@@ -88,6 +97,8 @@ export default class App {
             this.currentRenderer = 'canvas';
         }
         this.updateRendererBadge();
+        this.applyCameraOriginMode();
+        this.updateCameraOriginButton();
         // Start with the default scene (Starlinks)
         this.world = new World(60);
         this.currentScene = 'starlinks';
@@ -262,10 +273,32 @@ export default class App {
             badge.className = `renderer-badge ${this.currentRenderer}`;
         }
     }
+    applyCameraOriginMode() {
+        const renderer = this.sharedRendererSystem;
+        if (!renderer)
+            return;
+        renderer.cameraOriginMode = this.cameraOriginMode;
+    }
+    updateCameraOriginButton() {
+        if (!this.cameraOriginBtn)
+            return;
+        const label = CAMERA_ORIGIN_LABEL[this.cameraOriginMode];
+        this.cameraOriginBtn.textContent = `Origin: ${label}`;
+        this.cameraOriginBtn.title = `Camera origin: ${label} (toggle)`;
+    }
+    cycleCameraOriginMode() {
+        const idx = CAMERA_ORIGIN_CYCLE.indexOf(this.cameraOriginMode);
+        const nextIdx = (idx + 1) % CAMERA_ORIGIN_CYCLE.length;
+        this.cameraOriginMode = CAMERA_ORIGIN_CYCLE[nextIdx];
+        this.applyCameraOriginMode();
+        this.updateCameraOriginButton();
+        AppLog.info(`Camera origin set to ${CAMERA_ORIGIN_LABEL[this.cameraOriginMode]}`);
+    }
     updateStarlinksTimeUiVisibility() {
         const isStarlinks = this.currentScene === 'starlinks';
         this.simTimeStatusEl?.classList.toggle('hidden', !isStarlinks);
         this.nowBtn?.classList.toggle('hidden', !isStarlinks);
+        this.cameraOriginBtn?.classList.toggle('hidden', !isStarlinks);
         this.legendEl?.classList.toggle('hidden', !isStarlinks);
         const sunlightBtn = document.getElementById('sunlightBtn');
         sunlightBtn?.classList.toggle('hidden', !isStarlinks);
@@ -720,6 +753,10 @@ export default class App {
         const nowBtn = document.getElementById('nowButton');
         if (nowBtn) {
             nowBtn.addEventListener('click', () => this.jumpStarlinksToNow());
+        }
+        const cameraOriginBtn = document.getElementById('cameraOriginBtn');
+        if (cameraOriginBtn) {
+            cameraOriginBtn.addEventListener('click', () => this.cycleCameraOriginMode());
         }
         // Sunlight mode toggle
         const sunlightBtn = document.getElementById('sunlightBtn');

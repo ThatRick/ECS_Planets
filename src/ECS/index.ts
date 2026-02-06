@@ -33,5 +33,6 @@ export {
     createPlanetRenderer,
     createPlanetRendererWebGL,
     isWebGL2Available,
-    type PickableRenderer
+    type PickableRenderer,
+    type CameraOriginMode
 } from './systems/index.js'
