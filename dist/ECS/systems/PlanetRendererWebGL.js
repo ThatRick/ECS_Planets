@@ -30,6 +30,7 @@ out float v_viewDist;
 out float v_radius;
 out float v_effectiveSize;
 out vec3 v_centerView;
+out float v_screenDiameter;  // approximate screen-space diameter in pixels
 
 void main() {
     // Pass to fragment shader
@@ -56,6 +57,9 @@ void main() {
         effectiveSize *= viewDist / sqrt(denom);
     }
 
+    // Compute screen-space diameter for sphere/particle mode blending
+    v_screenDiameter = (effectiveSize / viewDist) * u_resolution.y * u_projMatrix[1][1];
+
     // Billboard: offset from center using camera-aligned axes
     vec3 worldPos = a_position + u_cameraRight * a_vertex.x * effectiveSize + u_cameraUp * a_vertex.y * effectiveSize;
 
@@ -71,56 +75,52 @@ void main() {
     v_centerView = viewCenter.xyz;
 }
 `;
-// Fragment shader - renders sphere-like shading with per-instance color
+// Fragment shader - dual-mode: sphere shading when large, soft dot when small.
+// Screen diameter (in pixels) is computed in the vertex shader and drives
+// a smooth crossfade so satellites stay bright and readable at every zoom.
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
 in vec2 v_uv;
 in vec3 v_color;
 in float v_depth;
+in float v_screenDiameter;
 
 out vec4 fragColor;
 
 void main() {
     float distSq = dot(v_uv, v_uv);
 
-    // AA using fwidth(v_uv) which is perfectly stable (linear interpolant).
-    // Work in distSq-space: the smoothstep upper bound is exactly 1.0,
-    // so nothing outside the unit circle ever receives any alpha.
+    // ── Anti-aliased disc mask ──────────────────────────────────────────
     float pixelSize = length(fwidth(v_uv));
     float edge = max(2.0 * pixelSize, 0.002);
     float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
     if (alpha < 0.01) discard;
 
-    // Reconstruct a sphere normal from the projected disc (billboarded sphere)
+    // ── Sphere shading (used when object is large on screen) ────────────
     float z = sqrt(max(1.0 - distSq, 0.0));
     vec3 normal = normalize(vec3(v_uv, z));
 
-    // Fixed view-space light direction for a simple 3D look
     vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
-
-    float ambient = 0.32;
     float diffuse = max(dot(normal, lightDir), 0.0);
 
-    // Rim/fresnel brightening prevents dark silhouette edges.
-    // z=1 at center, z→0 at limb; rim term adds soft fill light at edges.
-    float rim = 1.0 - z;
-    float rimLight = rim * rim * 0.35;
+    vec3 sphereCol = v_color * (0.30 + diffuse * 0.70);
 
-    vec3 col = v_color * (ambient + diffuse * 0.68 + rimLight);
-
-    // Subtle specular highlight
-    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    // Specular highlight
     vec3 reflectDir = reflect(-lightDir, normal);
-    float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
-    col += spec * 0.15;
+    float spec = pow(max(reflectDir.z, 0.0), 32.0);  // viewDir = (0,0,1)
+    sphereCol += spec * 0.15;
 
-    // For very small on-screen spheres (a few pixels), sphere-shading breaks
-    // down because most fragments are near the dark limb.  Blend toward a
-    // uniform flat-lit color so tiny satellites stay bright and readable.
-    // pixelSize ≈ 0.15 → ~13 px sphere, ≈ 0.5 → ~4 px, ≈ 1.0 → ~2 px.
-    float smallness = smoothstep(0.15, 0.55, pixelSize);
-    col = mix(col, v_color * 0.72, smallness);
+    // ── Soft dot (used when object is small on screen) ──────────────────
+    // Simple radial falloff: bright center, soft edge. No dark limb.
+    float r = sqrt(distSq);
+    float glow = 1.0 - r * r;                       // quadratic falloff
+    vec3 dotCol = v_color * (0.55 + 0.45 * glow);   // range: 0.55 at edge → 1.0 at center
+
+    // ── Blend between modes based on screen size ────────────────────────
+    // Below ~6px diameter: full dot mode.  Above ~16px: full sphere mode.
+    float t = clamp((v_screenDiameter - 6.0) / 10.0, 0.0, 1.0);
+    vec3 col = mix(dotCol, sphereCol, t);
 
     // Premultiplied alpha
     fragColor = vec4(col * alpha, alpha);
@@ -137,6 +137,7 @@ in float v_viewDist;
 in float v_radius;
 in float v_effectiveSize;
 in vec3 v_centerView;
+in float v_screenDiameter;
 
 uniform vec3 u_cameraRight;
 uniform vec3 u_cameraUp;
