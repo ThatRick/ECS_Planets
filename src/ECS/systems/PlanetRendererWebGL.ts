@@ -103,21 +103,34 @@ void main() {
     if (alpha < 0.01) discard;
 
     // Reconstruct a sphere normal from the projected disc (billboarded sphere)
-    float z = sqrt(1.0 - distSq);  // safe: distSq < 1.0 after discard
+    float z = sqrt(max(1.0 - distSq, 0.0));
     vec3 normal = normalize(vec3(v_uv, z));
 
     // Fixed view-space light direction for a simple 3D look
     vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
 
-    float ambient = 0.28;
+    float ambient = 0.32;
     float diffuse = max(dot(normal, lightDir), 0.0);
-    vec3 col = v_color * (ambient + diffuse * 0.72);
+
+    // Rim/fresnel brightening prevents dark silhouette edges.
+    // z=1 at center, z→0 at limb; rim term adds soft fill light at edges.
+    float rim = 1.0 - z;
+    float rimLight = rim * rim * 0.35;
+
+    vec3 col = v_color * (ambient + diffuse * 0.68 + rimLight);
 
     // Subtle specular highlight
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 reflectDir = reflect(-lightDir, normal);
     float spec = pow(max(dot(reflectDir, viewDir), 0.0), 32.0);
     col += spec * 0.15;
+
+    // For very small on-screen spheres (a few pixels), sphere-shading breaks
+    // down because most fragments are near the dark limb.  Blend toward a
+    // uniform flat-lit color so tiny satellites stay bright and readable.
+    // pixelSize ≈ 0.15 → ~13 px sphere, ≈ 0.5 → ~4 px, ≈ 1.0 → ~2 px.
+    float smallness = smoothstep(0.15, 0.55, pixelSize);
+    col = mix(col, v_color * 0.72, smallness);
 
     // Premultiplied alpha
     fragColor = vec4(col * alpha, alpha);
