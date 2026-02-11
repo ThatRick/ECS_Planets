@@ -77,7 +77,13 @@ void main() {
 `;
 // Fragment shader - dual-mode: sphere shading when large, soft dot when small.
 // Screen diameter (in pixels) is computed in the vertex shader and drives
-// a smooth crossfade so satellites stay bright and readable at every zoom.
+// a smooth crossfade between the two modes for both color AND alpha.
+//
+// The key insight: for tiny spheres the disc-edge anti-aliasing (smoothstep
+// in distSq space) spreads across the *entire* quad, creating a wide dark
+// semi-transparent ring that dominates the appearance.  Dot-mode avoids this
+// by using a gaussian alpha (bright center, transparent edge) with no hard
+// disc boundary at all.
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
@@ -91,14 +97,24 @@ out vec4 fragColor;
 void main() {
     float distSq = dot(v_uv, v_uv);
 
-    // ── Anti-aliased disc mask ──────────────────────────────────────────
+    // ── Blend factor: 0 = full dot, 1 = full sphere ────────────────────
+    // Below ~6px: dot.  Above ~16px: sphere.  Smooth ramp in between.
+    float t = clamp((v_screenDiameter - 6.0) / 10.0, 0.0, 1.0);
+
+    // ── Alpha models ───────────────────────────────────────────────────
+    // Sphere mode: sharp anti-aliased disc edge
     float pixelSize = length(fwidth(v_uv));
     float edge = max(2.0 * pixelSize, 0.002);
-    float alpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+    float sphereAlpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
+
+    // Dot mode: soft gaussian falloff — no hard edge, no dark ring
+    float dotAlpha = exp(-distSq * 3.0);
+
+    float alpha = mix(dotAlpha, sphereAlpha, t);
     if (alpha < 0.01) discard;
 
-    // ── Sphere shading (used when object is large on screen) ────────────
-    float z = sqrt(max(1.0 - distSq, 0.0));
+    // ── Sphere shading (large on screen) ────────────────────────────────
+    float z = sqrt(max(1.0 - min(distSq, 1.0), 0.0));
     vec3 normal = normalize(vec3(v_uv, z));
 
     vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
@@ -108,18 +124,14 @@ void main() {
 
     // Specular highlight
     vec3 reflectDir = reflect(-lightDir, normal);
-    float spec = pow(max(reflectDir.z, 0.0), 32.0);  // viewDir = (0,0,1)
+    float spec = pow(max(reflectDir.z, 0.0), 32.0);
     sphereCol += spec * 0.15;
 
-    // ── Soft dot (used when object is small on screen) ──────────────────
-    // Simple radial falloff: bright center, soft edge. No dark limb.
-    float r = sqrt(distSq);
-    float glow = 1.0 - r * r;                       // quadratic falloff
-    vec3 dotCol = v_color * (0.55 + 0.45 * glow);   // range: 0.55 at edge → 1.0 at center
+    // ── Soft dot (small on screen) ──────────────────────────────────────
+    // Color stays bright; the gaussian alpha handles the falloff.
+    vec3 dotCol = v_color;
 
-    // ── Blend between modes based on screen size ────────────────────────
-    // Below ~6px diameter: full dot mode.  Above ~16px: full sphere mode.
-    float t = clamp((v_screenDiameter - 6.0) / 10.0, 0.0, 1.0);
+    // ── Final blend ─────────────────────────────────────────────────────
     vec3 col = mix(dotCol, sphereCol, t);
 
     // Premultiplied alpha
