@@ -85,55 +85,21 @@ void main() {
 }
 `
 
-// Fragment shader – simple soft-dot particle.
-// Satellites are pixel-sized; sunlit/shadow color is computed on the CPU,
-// so the fragment shader only needs a clean anti-aliased dot with no
-// sphere shading, no specular, no lighting – just the instance color.
+// Fragment shader – flat soft-dot particle.
+// Color (sunlit / shadow) is computed on the CPU. No lighting here.
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
 in vec2 v_uv;
 in vec3 v_color;
-in float v_depth;
-in float v_screenDiameter;
 
 out vec4 fragColor;
 
 void main() {
     float distSq = dot(v_uv, v_uv);
-
-    // Blend factor: 0 = full dot, 1 = full sphere.
-    // Below ~6 px → dot.  Above ~16 px → sphere.
-    float t = clamp((v_screenDiameter - 6.0) / 10.0, 0.0, 1.0);
-
-    // ── Alpha ───────────────────────────────────────────────────────────
-    // Dot: soft gaussian – no hard edge, no dark ring.
-    float dotAlpha = exp(-distSq * 3.0);
-
-    // Sphere: sharp anti-aliased disc edge (only matters when close-up).
-    float pixelSize = length(fwidth(v_uv));
-    float edge = max(2.0 * pixelSize, 0.002);
-    float sphereAlpha = 1.0 - smoothstep(1.0 - edge, 1.0, distSq);
-
-    float alpha = mix(dotAlpha, sphereAlpha, t);
+    float alpha = exp(-distSq * 3.0);
     if (alpha < 0.01) discard;
-
-    // ── Color ───────────────────────────────────────────────────────────
-    // Dot: flat instance color – CPU already encodes sunlit vs shadow.
-    // Sphere (close-up only): mild shading so large bodies still look 3D.
-    vec3 col = v_color;
-
-    if (t > 0.01) {
-        float z = sqrt(max(1.0 - min(distSq, 1.0), 0.0));
-        vec3 normal = vec3(v_uv, z);
-        vec3 lightDir = normalize(vec3(0.35, 0.25, 1.0));
-        float diff = max(dot(normalize(normal), lightDir), 0.0);
-        vec3 sphereCol = v_color * (0.35 + diff * 0.65);
-        col = mix(v_color, sphereCol, t);
-    }
-
-    // Premultiplied alpha
-    fragColor = vec4(col * alpha, alpha);
+    fragColor = vec4(v_color * alpha, alpha);
 }
 `
 
